@@ -9,6 +9,7 @@ import jax
 import optax
 import pygad
 import json
+import os
 
 
 ### Calculate the target sensitivity ###
@@ -18,7 +19,7 @@ import json
 S, component_property_pairs = voyager()
 
 # set the frequency range
-frequencies = jnp.logspace(jnp.log10(20), jnp.log10(5000), 100)
+frequencies = np.logspace(np.log10(20), np.log10(5000), 100)
 
 # run the simulation with the frequency as the changing parameter
 carrier, signal, noise, detector_ports, *_ = df.run(S, [("f", "frequency")], frequencies)
@@ -31,8 +32,7 @@ powers = powers[detector_ports]
 powers = powers[0] - powers[1]
 
 # calculate the sensitivity
-target_sensitivity = noise / jnp.abs(powers)
-target_loss = jnp.sum(jnp.log10(target_sensitivity))
+target_sensitivity = noise / np.abs(powers)
 
 
 ### Start from random parameters and optimize the sensitivity ###
@@ -72,7 +72,7 @@ bounds = np.array([[
     property_bounds[pair[1]][1]] for pair in optimization_pairs]).T
 
 # start from random parameters
-initial_guess = jnp.array(np.random.uniform(-10, 10, len(optimization_pairs)))
+initial_guess = np.array(np.random.uniform(-10, 10, len(optimization_pairs)))
 
 
 def fitness_func(ga_instance, solution, solution_idx):
@@ -82,16 +82,16 @@ def fitness_func(ga_instance, solution, solution_idx):
     powers = demodulate_signal_power(carrier, signal)
     powers = powers[detector_ports]
     powers = powers[0] - powers[1]
-    sensitivity = noise / jnp.abs(powers)
+    sensitivity = noise / np.abs(powers)
 
     # fitness/sensitivity relative to target fitness => fitness > 1 is better than voyager setup
-    return jnp.sum(jnp.log10(sensitivity)) / target_loss
+    return np.sum(np.log10(target_sensitivity) - np.log10(sensitivity))
 
 # genetic algorithm setup
 
 fitness_function = fitness_func
 
-num_generations = 50
+num_generations = 3
 num_parents_mating = 4
 
 sol_per_pop = 8
@@ -108,18 +108,45 @@ crossover_type = "single_point"
 mutation_type = "random"
 mutation_percent_genes = 10
 
+# document history
+history_best = []
+history_mean = []
+
+# callback executed at the end of each generation
+def on_generation(ga_instance):
+	# compute fitness for each solution in the current population
+	fitnesses = []
+	for idx, sol in enumerate(ga_instance.population):
+		# document fitnesses
+		fitnesses.append(fitness_function(ga_instance, sol, idx))
+	# store best and mean fitness for this generation
+	history_best.append(float(np.max(fitnesses)))
+	history_mean.append(float(np.mean(fitnesses)))
+
+	# print progress: generation / total (percent) - best and mean fitness
+	gen = ga_instance.generations_completed if hasattr(ga_instance, "generations_completed") else len(history_best)
+	total = getattr(ga_instance, "num_generations", None)
+	if total:
+		pct = 100.0 * gen / total
+		print(f"[GA] Generation {gen}/{total} ({pct:.1f}%) - best: {history_best[-1]:.6g}, mean: {history_mean[-1]:.6g}")
+	else:
+		print(f"[GA] Generation {gen} - best: {history_best[-1]:.6g}, mean: {history_mean[-1]:.6g}")
+
+
 ga_instance = pygad.GA(num_generations=num_generations,
-                       num_parents_mating=num_parents_mating,
-                       fitness_func=fitness_function,
-                       sol_per_pop=sol_per_pop,
-                       num_genes=num_genes,
-                       init_range_low=init_range_low,
-                       init_range_high=init_range_high,
-                       parent_selection_type=parent_selection_type,
-                       keep_parents=keep_parents,
-                       crossover_type=crossover_type,
-                       mutation_type=mutation_type,
-                       mutation_percent_genes=mutation_percent_genes)
+					   num_parents_mating=num_parents_mating,
+					   fitness_func=fitness_function,
+					   sol_per_pop=sol_per_pop,
+					   num_genes=num_genes,
+					   init_range_low=init_range_low,
+					   init_range_high=init_range_high,
+					   parent_selection_type=parent_selection_type,
+					   keep_parents=keep_parents,
+					   crossover_type=crossover_type,
+					   mutation_type=mutation_type,
+					   mutation_percent_genes=mutation_percent_genes,
+					   on_generation=on_generation,
+					   parallel_processing=('thread', 8))  # attach the callback
 
 ga_instance.run()
 
@@ -132,18 +159,21 @@ print("Predicted output based on the best solution : {prediction}".format(predic
 
 
 best_params = solution
-losses = 
+losses = history_best
 
 with open("voyager_optimization_parameters.json", "w") as f:
-    json.dump(best_params.tolist(), f, indent=4)
+	json.dump(best_params.tolist(), f, indent=4)
 
 with open("voyager_optimization_losses.json", "w") as f:
-    json.dump(losses, f, indent=4)
+	json.dump(losses, f, indent=4)
+
+with open("voyager_optimization_mean_fitness.json", "w") as f:
+	json.dump(history_mean, f, indent=4)
 
 plt.figure()
 plt.plot(losses)
-plt.xlabel("Iteration")
-plt.ylabel("Loss")
+plt.xlabel("Generation")
+plt.ylabel("Best fitness")
 plt.axhline(0, color="red", linestyle="--")
 plt.grid()
 plt.tight_layout()
@@ -159,8 +189,7 @@ carrier, signal, noise, detector_ports, *_ = df.run(S, [("f", "frequency")], fre
 powers = demodulate_signal_power(carrier, signal)
 powers = powers[detector_ports]
 powers = powers[0] - powers[1]
-sensitivity = noise / jnp.abs(powers)
-loss = jnp.sum(sensitivity)
+sensitivity = noise / np.abs(powers)
 
 plt.figure()
 plt.plot(frequencies, sensitivity, label="Optimized Sensitivity")
