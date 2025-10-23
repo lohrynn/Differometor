@@ -6,3 +6,5 @@ __pycache__
 dist
 uv.lock
 .vscode/settings.json
+jobfiles_*
+tmp

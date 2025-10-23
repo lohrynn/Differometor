@@ -1,3 +1,5 @@
+import os
+os.environ['MPLCONFIGDIR'] = "/mnt/lustre/work/krenn/klz895/Differometor/tmp"
 import differometor as df
 from differometor.setups import voyager
 from differometor.utils import sigmoid_bounding, update_setup
@@ -9,7 +11,6 @@ import jax
 import optax
 import pygad
 import json
-import os
 
 
 ### Calculate the target sensitivity ###
@@ -89,21 +90,23 @@ def fitness_func(ga_instance, solution, solution_idx):
 
 # genetic algorithm setup
 
+threads = 8
+
 fitness_function = fitness_func
 
-num_generations = 3
-num_parents_mating = 4
+num_generations = 100
+num_parents_mating = 10
 
-sol_per_pop = 8
+sol_per_pop = 20
 num_genes = len(optimization_pairs)
 
 init_range_low = -10
 init_range_high = 10
 
 parent_selection_type = "sss"
-keep_parents = 1
+keep_parents = int(sol_per_pop * 0.15)
 
-crossover_type = "single_point"
+crossover_type = "two_points"
 
 mutation_type = "random"
 mutation_percent_genes = 10
@@ -146,7 +149,7 @@ ga_instance = pygad.GA(num_generations=num_generations,
 					   mutation_type=mutation_type,
 					   mutation_percent_genes=mutation_percent_genes,
 					   on_generation=on_generation,
-					   parallel_processing=('thread', 8))  # attach the callback
+					   parallel_processing=('thread', threads))  # attach the callback
 
 ga_instance.run()
 
@@ -159,7 +162,7 @@ print("Predicted output based on the best solution : {prediction}".format(predic
 
 
 best_params = solution
-losses = history_best
+losses = -history_best
 
 with open("voyager_optimization_parameters.json", "w") as f:
 	json.dump(best_params.tolist(), f, indent=4)
