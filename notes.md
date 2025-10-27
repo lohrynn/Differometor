@@ -22,7 +22,7 @@
 ## Particle Swarm Optimization (PSO)
 ### Ressources
 - [Getting started with PSO (EvoX)](https://evox.readthedocs.io/en/latest/examples/so-algorithm.html)
-- 
+- [Custom Problems in EvoX](https://evox.readthedocs.io/en/stable/tutorial/tutorial_part5.html)
 
 ## Differential Evolution (DE)
 

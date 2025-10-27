@@ -14,11 +14,15 @@ license = "MIT"
 license-files = ["LICEN[CS]E*"]
 dependencies = [
     "jax==0.8.0",
- "optax==0.2.4",
- "numpy",
- "matplotlib",
- "tqdm",
- "pygad>=3.5.0",
+    "optax==0.2.4",
+    "numpy",
+    "matplotlib",
+    "tqdm",
+    "pygad>=3.5.0",
+    "torch>=2.9.0",
+    "torchvision>=0.24.0",
+    "evox>=1.2.2",
+    "torch2jax>=0.1.0",
 ]
 
 [project.urls]

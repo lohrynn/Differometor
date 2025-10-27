@@ -9,6 +9,11 @@ import jax
 import optax
 import json
 
+import torch
+from evox.algorithms import PSO
+from evox.workflows import StdWorkflow, EvalMonitor
+from evox.core import Problem
+from torch2jax import t2j, j2t
 
 ### Calculate the target sensitivity ###
 #--------------------------------------#
@@ -17,7 +22,7 @@ import json
 S, component_property_pairs = voyager()
 
 # set the frequency range
-frequencies = jnp.logspace(jnp.log10(20), jnp.log10(5000), 100)
+frequencies = np.logspace(np.log10(20), np.log10(5000), 100)
 
 # run the simulation with the frequency as the changing parameter
 carrier, signal, noise, detector_ports, *_ = df.run(S, [("f", "frequency")], frequencies)
@@ -30,8 +35,7 @@ powers = powers[detector_ports]
 powers = powers[0] - powers[1]
 
 # calculate the sensitivity
-target_sensitivity = noise / jnp.abs(powers)
-target_loss = jnp.sum(jnp.log10(target_sensitivity))
+target_loss = noise / np.abs(powers)
 
 
 ### Start from random parameters and optimize the sensitivity ###
@@ -71,11 +75,10 @@ bounds = np.array([[
     property_bounds[pair[1]][1]] for pair in optimization_pairs]).T
 
 # start from random parameters
-initial_guess = jnp.array(np.random.uniform(-10, 10, len(optimization_pairs)))
+initial_guess = np.array(np.random.uniform(-10, 10, len(optimization_pairs)))
 
 
-# fitness function is the negative objective function
-def fitness_function(optimized_parameters):
+def objective_function(optimized_parameters):
     # map the parameters to between 0 and 1 and then to their respective bounds
     optimized_parameters = sigmoid_bounding(optimized_parameters, bounds)
     carrier, signal, noise = df.simulate_in_parallel(optimized_parameters, *simulation_arrays[1:])
@@ -84,53 +87,74 @@ def fitness_function(optimized_parameters):
     powers = powers[0] - powers[1]
     sensitivity = noise / jnp.abs(powers)
 
-    # fitness relative to target loss => fitness > 0 is better than voyager setup
-    return target_loss - jnp.sum(jnp.log10(sensitivity))
+    # loss relative to target loss => loss < 0 is better than voyager setup
+    return jnp.sum(jnp.log10(sensitivity)) - target_loss
 
+# PSO setup
 
-grad_fn = jax.jit(jax.value_and_grad(fitness_function))
-# warmup the function to compile it
-_ = grad_fn(initial_guess)
+num_generations = 100
+pop_size = 100
 
-optimizer = optax.chain(
-    optax.clip_by_global_norm(1.0),
-    optax.adam(learning_rate=0.1)
+# Maybe define a some universal names for those
+lower_bound = -10
+upper_bound = 10
+
+algorithm = PSO(
+    pop_size=pop_size,
+    lb=lower_bound * torch.ones(len(optimization_pairs)),
+    ub=upper_bound * torch.ones(len(optimization_pairs)),
 )
-optimizer_state = optimizer.init(initial_guess)
 
-best_loss, best_params = 1e10, initial_guess
-params, no_improve_count, losses = initial_guess, 0, []
+class VoyagerProblem(Problem):
+    def __init__(self):
+        super().__init__()
+        self.vectorized_objective = jax.vmap(objective_function, in_axes=0)
+        
+    def evaluate(self, pop: torch.Tensor) -> torch.Tensor:
+        return j2t(self.vectorized_objective(t2j(pop)))
+        
+        
+problem = VoyagerProblem()
 
-for i in range(50000):
-    loss, grads = grad_fn(params)
+monitor = EvalMonitor()
 
-    if i % 100 == 0:
-        print(f"Iteration {i}: Loss = {loss}")
+workflow = StdWorkflow(
+    algorithm=algorithm,
+    problem=problem,
+    monitor=monitor,
+)
 
-    if loss < best_loss - 1e-4:
-        best_loss, best_params, no_improve_count = loss, params, 0
-        print(f"Iteration {i}: New best loss = {loss}")
-    else:
-        no_improve_count += 1
+# Perform optimization
 
-    updates, optimizer_state = optimizer.update(grads, optimizer_state, params)
-    params = optax.apply_updates(params, updates)
-    losses.append(float(loss))
 
-    # if the loss has not improved (< best_loss - 1e-4) over 1000 iterations, stop the optimization
-    if no_improve_count > 1000:
-        break
+for _ in range(num_generations): 
+    workflow.step()
+    
+
+
+solution = monitor.topk_solutions
+loss = monitor.topk_fitness
+print("Parameters of the best solution : {solution}".format(solution=solution))
+print("Fitness value of the best solution = {loss}".format(loss=loss))
+
+prediction = objective_function(solution)
+print("Predicted output based on the best solution : {prediction}".format(prediction=prediction))
 
 with open("voyager_optimization_parameters.json", "w") as f:
-    json.dump(best_params.tolist(), f, indent=4)
+	json.dump(solution.tolist(), f, indent=4)
+ 
+losses = monitor.fit_history
 
 with open("voyager_optimization_losses.json", "w") as f:
-    json.dump(losses, f, indent=4)
+	json.dump(losses, f, indent=4)
+
+# with open("voyager_optimization_mean_fitness.json", "w") as f:
+# 	json.dump(losses, f, indent=4)
 
 plt.figure()
 plt.plot(losses)
-plt.xlabel("Iteration")
-plt.ylabel("Loss")
+plt.xlabel("Generation")
+plt.ylabel("Best fitness")
 plt.axhline(0, color="red", linestyle="--")
 plt.grid()
 plt.tight_layout()
@@ -140,18 +164,17 @@ plt.savefig("voyager_optimization_loss.png")
 ### Calculate the sensitivity of the best found setup ###
 #-------------------------------------------------------#
 
-update_setup(best_params, optimization_pairs, bounds, S)
+update_setup(solution, optimization_pairs, bounds, S)
 
 carrier, signal, noise, detector_ports, *_ = df.run(S, [("f", "frequency")], frequencies)
 powers = demodulate_signal_power(carrier, signal)
 powers = powers[detector_ports]
 powers = powers[0] - powers[1]
-sensitivity = noise / jnp.abs(powers)
-loss = jnp.sum(sensitivity)
+sensitivity = noise / np.abs(powers)
 
 plt.figure()
 plt.plot(frequencies, sensitivity, label="Optimized Sensitivity")
-plt.plot(frequencies, target_sensitivity, label="Target Sensitivity")
+plt.plot(frequencies, target_loss, label="Target Sensitivity")
 plt.xscale("log")
 plt.yscale("log")
 plt.xlabel("Frequency (Hz)")
