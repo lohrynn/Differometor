@@ -1,5 +1,3 @@
-import os
-os.environ['MPLCONFIGDIR'] = "/mnt/lustre/work/krenn/klz895/Differometor/tmp"
 import differometor as df
 from differometor.setups import voyager
 from differometor.utils import sigmoid_bounding, update_setup
@@ -15,7 +13,6 @@ import torch
 from evox.algorithms import PSO
 from evox.workflows import StdWorkflow, EvalMonitor
 from evox.core import Problem
-from torch2jax import t2j, j2t
 
 ### Calculate the target sensitivity ###
 #--------------------------------------#
@@ -107,15 +104,19 @@ algorithm = PSO(
     ub=upper_bound * torch.ones(len(optimization_pairs)),
 )
 
+def j2t(x):
+    return torch.utils.dlpack.from_dlpack(jax.dlpack.to_dlpack(x))
+
+def t2j(x):
+    return jax.dlpack.from_dlpack(torch.utils.dlpack.to_dlpack(x))
+
 class VoyagerProblem(Problem):
     def __init__(self):
         super().__init__()
         self.vectorized_objective = jax.vmap(objective_function, in_axes=0)
         
     def evaluate(self, pop: torch.Tensor) -> torch.Tensor:
-        jax_pop = jax.dlpack.from_dlpack(pop.to(device="cuda"), copy=False)
-        
-        return torch.from_dlpack(self.vectorized_objective(jax_pop))
+        return j2t(self.vectorized_objective(t2j(pop)))
         
         
 problem = VoyagerProblem()

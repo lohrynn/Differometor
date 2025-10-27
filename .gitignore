@@ -10,3 +10,4 @@ uv.lock
 jobfiles_*
 tmp
 uninstall.txt
+.python-version
