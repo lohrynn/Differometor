@@ -9,9 +9,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import jax
 import optax
-import pygad
 import json
 
+import evosax
+from evosax.algorithms import PSO
 
 ### Calculate the target sensitivity ###
 #--------------------------------------#
@@ -33,7 +34,7 @@ powers = powers[detector_ports]
 powers = powers[0] - powers[1]
 
 # calculate the sensitivity
-target_sensitivity = noise / np.abs(powers)
+target_loss = noise / np.abs(powers)
 
 
 ### Start from random parameters and optimize the sensitivity ###
@@ -76,102 +77,79 @@ bounds = np.array([[
 initial_guess = np.array(np.random.uniform(-10, 10, len(optimization_pairs)))
 
 
-def fitness_func(ga_instance, solution, solution_idx):
+def objective_function(optimized_parameters):
     # map the parameters to between 0 and 1 and then to their respective bounds
-    solution = sigmoid_bounding(solution, bounds)
-    carrier, signal, noise = df.simulate_in_parallel(solution, *simulation_arrays[1:])
+    optimized_parameters = sigmoid_bounding(optimized_parameters, bounds)
+    carrier, signal, noise = df.simulate_in_parallel(optimized_parameters, *simulation_arrays[1:])
     powers = demodulate_signal_power(carrier, signal)
     powers = powers[detector_ports]
     powers = powers[0] - powers[1]
-    sensitivity = noise / np.abs(powers)
+    sensitivity = noise / jnp.abs(powers)
 
-    # fitness/sensitivity relative to target fitness => fitness > 1 is better than voyager setup
-    return np.sum(np.log10(target_sensitivity) - np.log10(sensitivity))
+    # loss relative to target loss => loss < 0 is better than voyager setup
+    return jnp.sum(jnp.log10(sensitivity)) - target_loss
 
-# genetic algorithm setup
+# PSO setup
 
-threads = 8
+num_generations = 100
+population_size = 100
 
-fitness_function = fitness_func
+# Maybe define a some universal names for those
+lower_bound = -10
+upper_bound = 10
 
-num_generations = 4
-num_parents_mating = 10
+algorithm = PSO(
+    population_size=population_size,
+    
+)
 
-sol_per_pop = 20
-num_genes = len(optimization_pairs)
+class VoyagerProblem(Problem):
+    def __init__(self):
+        super().__init__()
+        self.vectorized_objective = jax.vmap(objective_function, in_axes=0)
+        
+    def evaluate(self, pop: torch.Tensor) -> torch.Tensor:
+        jax_pop = jax.dlpack.from_dlpack(pop.to(device="cuda"), copy=False)
+        
+        return torch.from_dlpack(self.vectorized_objective(jax_pop))
+        
+        
+problem = VoyagerProblem()
 
-init_range_low = -10
-init_range_high = 10
+monitor = EvalMonitor()
 
-parent_selection_type = "sss"
-keep_parents = int(sol_per_pop * 0.15)
+workflow = StdWorkflow(
+    algorithm=algorithm,
+    problem=problem,
+    monitor=monitor,
+)
 
-crossover_type = "two_points"
-
-mutation_type = "random"
-mutation_percent_genes = 10
-
-# document history
-history_best = []
-history_mean = []
-
-# callback executed at the end of each generation
-def on_generation(ga_instance):
-	# compute fitness for each solution in the current population
-	fitnesses = []
-	for idx, sol in enumerate(ga_instance.population):
-		# document fitnesses
-		fitnesses.append(fitness_function(ga_instance, sol, idx))
-	# store best and mean fitness for this generation
-	history_best.append(float(np.max(fitnesses)))
-	history_mean.append(float(np.mean(fitnesses)))
-
-	# print progress: generation / total (percent) - best and mean fitness
-	gen = ga_instance.generations_completed if hasattr(ga_instance, "generations_completed") else len(history_best)
-	total = getattr(ga_instance, "num_generations", None)
-	if total:
-		pct = 100.0 * gen / total
-		print(f"[GA] Generation {gen}/{total} ({pct:.1f}%) - best: {history_best[-1]:.6g}, mean: {history_mean[-1]:.6g}")
-	else:
-		print(f"[GA] Generation {gen} - best: {history_best[-1]:.6g}, mean: {history_mean[-1]:.6g}")
+# Perform optimization
 
 
-ga_instance = pygad.GA(num_generations=num_generations,
-					   num_parents_mating=num_parents_mating,
-					   fitness_func=fitness_function,
-					   sol_per_pop=sol_per_pop,
-					   num_genes=num_genes,
-					   init_range_low=init_range_low,
-					   init_range_high=init_range_high,
-					   parent_selection_type=parent_selection_type,
-					   keep_parents=keep_parents,
-					   crossover_type=crossover_type,
-					   mutation_type=mutation_type,
-					   mutation_percent_genes=mutation_percent_genes,
-					   on_generation=on_generation,
-					   parallel_processing=('thread', threads))  # attach the callback
+for _ in range(num_generations): 
+    workflow.step()
+    
 
-ga_instance.run()
 
-solution, solution_fitness, solution_idx = ga_instance.best_solution()
+solution = monitor.topk_solutions
+loss = monitor.topk_fitness
 print("Parameters of the best solution : {solution}".format(solution=solution))
-print("Fitness value of the best solution = {solution_fitness}".format(solution_fitness=solution_fitness))
+print("Fitness value of the best solution = {loss}".format(loss=loss))
 
-prediction = fitness_function(ga_instance, solution, solution_idx)
+prediction = objective_function(solution)
 print("Predicted output based on the best solution : {prediction}".format(prediction=prediction))
 
-
-best_params = solution
-losses = - jnp.array(history_best)
-
 with open("voyager_optimization_parameters.json", "w") as f:
-	json.dump(best_params.tolist(), f, indent=4)
+	json.dump(solution.tolist(), f, indent=4)
+ 
+losses = monitor.fit_history
 
 with open("voyager_optimization_losses.json", "w") as f:
 	json.dump(losses, f, indent=4)
 
-with open("voyager_optimization_mean_fitness.json", "w") as f:
-	json.dump(history_mean, f, indent=4)
+# with open("voyager_optimization_mean_fitness.json", "w") as f:
+# 	json.dump(losses, f, indent=4)
 
 plt.figure()
 plt.plot(losses)
@@ -186,7 +164,7 @@ plt.savefig("voyager_optimization_loss.png")
 ### Calculate the sensitivity of the best found setup ###
 #-------------------------------------------------------#
 
-update_setup(best_params, optimization_pairs, bounds, S)
+update_setup(solution, optimization_pairs, bounds, S)
 
 carrier, signal, noise, detector_ports, *_ = df.run(S, [("f", "frequency")], frequencies)
 powers = demodulate_signal_power(carrier, signal)
@@ -196,7 +174,7 @@ sensitivity = noise / np.abs(powers)
 
 plt.figure()
 plt.plot(frequencies, sensitivity, label="Optimized Sensitivity")
-plt.plot(frequencies, target_sensitivity, label="Target Sensitivity")
+plt.plot(frequencies, target_loss, label="Target Sensitivity")
 plt.xscale("log")
 plt.yscale("log")
 plt.xlabel("Frequency (Hz)")

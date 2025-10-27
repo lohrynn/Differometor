@@ -13,16 +13,18 @@ classifiers = ["Programming Language :: Python :: 3", "Operating System :: OS In
 license = "MIT"
 license-files = ["LICEN[CS]E*"]
 dependencies = [
-    "jax==0.8.0",
+    "jax[cuda12]==0.8.0",
     "optax==0.2.4",
     "numpy",
     "matplotlib",
     "tqdm",
     "pygad>=3.5.0",
-    "torch>=2.9.0",
-    "torchvision>=0.24.0",
     "evox>=1.2.2",
     "torch2jax>=0.1.0",
+    "torch>=2.9.0",
+    "torchvision>=0.24.0",
+    "torchaudio>=2.9.0",
+    "evosax>=0.2.0",
 ]
 
 [project.urls]

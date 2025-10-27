@@ -1,3 +1,5 @@
+import os
+os.environ['MPLCONFIGDIR'] = "/mnt/lustre/work/krenn/klz895/Differometor/tmp"
 import differometor as df
 from differometor.setups import voyager
 from differometor.utils import sigmoid_bounding, update_setup
@@ -111,7 +113,9 @@ class VoyagerProblem(Problem):
         self.vectorized_objective = jax.vmap(objective_function, in_axes=0)
         
     def evaluate(self, pop: torch.Tensor) -> torch.Tensor:
-        return j2t(self.vectorized_objective(t2j(pop)))
+        jax_pop = jax.dlpack.from_dlpack(pop.to(device="cuda"), copy=False)
+        
+        return torch.from_dlpack(self.vectorized_objective(jax_pop))
         
         
 problem = VoyagerProblem()

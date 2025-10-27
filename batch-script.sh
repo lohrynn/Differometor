@@ -7,7 +7,7 @@
 #SBATCH --cpus-per-task=8          # Number of CPU cores per task
 #SBATCH --nodes=1                  # Ensure that all cores are on the same machine with nodes=1
 #SBATCH --partition=2080-galvani   # Which partition will run your job
-#SBATCH --time=0-01:50            # Allowed runtime in D-HH:MM
+#SBATCH --time=0-01:30             # Allowed runtime in D-HH:MM
 #SBATCH --gres=gpu:1               # (optional) Requesting type and number of GPUs
 #SBATCH --mem=16G                  # Total memory pool for all cores (see also --mem-per-cpu); exceeding this number will cause your job to fail.
 #SBATCH --output=./jobfiles_out/myjob-%j.out       # File to which STDOUT will be written - make sure this is not on $HOME
@@ -21,14 +21,14 @@ pwd
 nvidia-smi # only if you requested gpus
 ls $WORK # not necessary just here to illustrate that $WORK is available here
 
+
 # Setup Phase
 # add possibly other setup code here, e.g.
 # - copy singularity images or datasets to local on-compute-node storage like /scratch_local
 # - loads virtual envs, like with anaconda
 # - set environment variables
 # - determine commandline arguments for `srun` calls
-source ./.venv/bin/activate
-nvidia-smi
+source $WORK/Differometor/.venv/bin/activate
 
 # Compute Phase
-srun python examples/voyager_genetic.py   # srun will automatically pickup the configuration defined via `#SBATCH` and `sbatch` command line arguments
+srun python examples/voyager_evox_pso.py   # srun will automatically pickup the configuration defined via `#SBATCH` and `sbatch` command line arguments
