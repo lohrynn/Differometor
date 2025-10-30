@@ -1,5 +1,6 @@
 import os
 os.environ['MPLCONFIGDIR'] = "/mnt/lustre/work/krenn/klz895/Differometor/tmp"
+from datetime import datetime
 import differometor as df
 from differometor.setups import voyager
 from differometor.utils import sigmoid_bounding, update_setup
@@ -15,6 +16,7 @@ import torch
 from evox.algorithms import PSO
 from evox.workflows import StdWorkflow, EvalMonitor
 from evox.core import Problem
+
 
 ### Calculate the target sensitivity ###
 #--------------------------------------#
@@ -94,8 +96,16 @@ def objective_function(optimized_parameters):
 
 # PSO setup
 
-num_generations = 400
+num_generations = 10
 pop_size = 100
+
+# Create output directory
+timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
+hyper_param_str = f"gen{num_generations}_pop{pop_size}"
+output_path = os.path.join("/mnt/lustre/work/krenn/klz895/Differometor/examples/voyager_evox_pso", hyper_param_str)
+os.makedirs(output_path, exist_ok=True)
+
+print(f"Output directory: {output_path}")
 
 # Maybe define a some universal names for those
 lower_bound = -10
@@ -152,25 +162,34 @@ print("Predicted output based on the best solution : {prediction}".format(predic
 
 
 
-with open("voyager_optimization_parameters.json", "w") as f:
+with open(os.path.join(output_path, f"voyager_evox_pso_{timestamp}_parameters_{hyper_param_str}.json"), "w") as f:
 	json.dump(solution.tolist(), f, indent=4)
  
 losses = [loss.tolist() for loss in monitor.fit_history]
+best_losses = [min(loss) for loss in losses]
 
-with open("voyager_optimization_losses.json", "w") as f:
+with open(os.path.join(output_path, f"voyager_evox_pso_{timestamp}_losses_{hyper_param_str}.json"), "w") as f:
 	json.dump(losses, f, indent=4)
 
-# with open("voyager_optimization_mean_fitness.json", "w") as f:
-# 	json.dump(losses, f, indent=4)
 
 plt.figure()
 plt.plot(losses)
 plt.xlabel("Generation")
-plt.ylabel("Best fitness")
+plt.ylabel("All losses")
 plt.axhline(0, color="red", linestyle="--")
 plt.grid()
 plt.tight_layout()
-plt.savefig("voyager_optimization_loss.png")
+plt.savefig(os.path.join(output_path, f"voyager_evox_pso_{timestamp}_losses_{hyper_param_str}.png"))
+
+
+plt.figure()
+plt.plot(losses)
+plt.xlabel("Generation")
+plt.ylabel("Best loss")
+plt.axhline(0, color="red", linestyle="--")
+plt.grid()
+plt.tight_layout()
+plt.savefig(os.path.join(output_path, f"voyager_evox_pso_{timestamp}_best_loss_{hyper_param_str}.png"))
 
 
 ### Calculate the sensitivity of the best found setup ###
@@ -194,4 +213,4 @@ plt.ylabel("Sensitivity [/sqrt(Hz)]")
 plt.legend()
 plt.grid()
 plt.tight_layout()
-plt.savefig("voyager_optimization_sensitivity.png")
+plt.savefig(os.path.join(output_path, f"voyager_evox_pso_{timestamp}_sensitivity_{hyper_param_str}.png"))
