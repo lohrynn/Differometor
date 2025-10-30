@@ -1,3 +1,5 @@
+import os
+os.environ['MPLCONFIGDIR'] = "/mnt/lustre/work/krenn/klz895/Differometor/tmp"
 import differometor as df
 from differometor.setups import voyager
 from differometor.utils import sigmoid_bounding, update_setup
@@ -21,7 +23,7 @@ from evox.core import Problem
 S, component_property_pairs = voyager()
 
 # set the frequency range
-frequencies = np.logspace(np.log10(20), np.log10(5000), 100)
+frequencies = jnp.logspace(jnp.log10(20), jnp.log10(5000), 100)
 
 # run the simulation with the frequency as the changing parameter
 carrier, signal, noise, detector_ports, *_ = df.run(S, [("f", "frequency")], frequencies)
@@ -34,7 +36,8 @@ powers = powers[detector_ports]
 powers = powers[0] - powers[1]
 
 # calculate the sensitivity
-target_loss = noise / np.abs(powers)
+target_sensitivity = noise / jnp.abs(powers)
+target_loss = jnp.sum(jnp.log10(target_sensitivity))
 
 
 ### Start from random parameters and optimize the sensitivity ###
@@ -69,12 +72,12 @@ simulation_arrays, detector_ports, *_ = df.run_build_step(
 )
 
 # calculate the bounds for the properties to be optimized
-bounds = np.array([[
+bounds = jnp.array([[
     property_bounds[pair[1]][0], 
     property_bounds[pair[1]][1]] for pair in optimization_pairs]).T
 
 # start from random parameters
-initial_guess = np.array(np.random.uniform(-10, 10, len(optimization_pairs)))
+initial_guess = jnp.array(np.random.uniform(-10, 10, len(optimization_pairs)))
 
 
 def objective_function(optimized_parameters):
@@ -91,7 +94,7 @@ def objective_function(optimized_parameters):
 
 # PSO setup
 
-num_generations = 100
+num_generations = 400
 pop_size = 100
 
 # Maybe define a some universal names for those
@@ -104,11 +107,11 @@ algorithm = PSO(
     ub=upper_bound * torch.ones(len(optimization_pairs)),
 )
 
-def j2t(x):
-    return torch.utils.dlpack.from_dlpack(jax.dlpack.to_dlpack(x))
-
 def t2j(x):
-    return jax.dlpack.from_dlpack(torch.utils.dlpack.to_dlpack(x))
+    return jax.dlpack.from_dlpack(x)
+
+def j2t(x):
+    return torch.utils.dlpack.from_dlpack(x)
 
 class VoyagerProblem(Problem):
     def __init__(self):
@@ -136,19 +139,23 @@ for _ in range(num_generations):
     workflow.step()
     
 
-
-solution = monitor.topk_solutions
-loss = monitor.topk_fitness
+print(monitor.topk_solutions.shape)
+solution = t2j(monitor.topk_solutions)[0]
+loss = t2j(monitor.topk_fitness)[0]
 print("Parameters of the best solution : {solution}".format(solution=solution))
 print("Fitness value of the best solution = {loss}".format(loss=loss))
 
 prediction = objective_function(solution)
 print("Predicted output based on the best solution : {prediction}".format(prediction=prediction))
 
+
+
+
+
 with open("voyager_optimization_parameters.json", "w") as f:
 	json.dump(solution.tolist(), f, indent=4)
  
-losses = monitor.fit_history
+losses = [loss.tolist() for loss in monitor.fit_history]
 
 with open("voyager_optimization_losses.json", "w") as f:
 	json.dump(losses, f, indent=4)
@@ -175,11 +182,11 @@ carrier, signal, noise, detector_ports, *_ = df.run(S, [("f", "frequency")], fre
 powers = demodulate_signal_power(carrier, signal)
 powers = powers[detector_ports]
 powers = powers[0] - powers[1]
-sensitivity = noise / np.abs(powers)
+sensitivity = noise / jnp.abs(powers)
 
 plt.figure()
 plt.plot(frequencies, sensitivity, label="Optimized Sensitivity")
-plt.plot(frequencies, target_loss, label="Target Sensitivity")
+plt.plot(frequencies, target_sensitivity, label="Target Sensitivity")
 plt.xscale("log")
 plt.yscale("log")
 plt.xlabel("Frequency (Hz)")

@@ -1,3 +1,6 @@
+# Notes
+- Eine gute Initialisierung immer als richtlinie
+- Stabilität bei Initialisierung charakterisieren
 # Candidate Libraries
 ## PyGAD
 - not that great
