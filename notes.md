@@ -1,6 +1,7 @@
 # Notes
 - Eine gute Initialisierung immer als richtlinie
 - Stabilität bei Initialisierung charakterisieren
+- Man kann noch eininges viel modularer machen! Aber erstmal verschiedene Algos ausprobieren von EvoX
 # Candidate Libraries
 ## PyGAD
 - not that great

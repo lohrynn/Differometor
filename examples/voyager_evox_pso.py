@@ -183,7 +183,7 @@ plt.savefig(os.path.join(output_path, f"voyager_evox_pso_{timestamp}_losses_{hyp
 
 
 plt.figure()
-plt.plot(losses)
+plt.plot(best_losses)
 plt.xlabel("Generation")
 plt.ylabel("Best loss")
 plt.axhline(0, color="red", linestyle="--")
