@@ -1,17 +1,24 @@
+import os
+
+os.environ["MPLCONFIGDIR"] = "./tmp" # TODO set this inside the env maybe by: export MPLCONFIGDIR=/mnt/lustre/work/krenn/klz895/Differometor/tmp
+from datetime import datetime
 import differometor as df
 from differometor.setups import voyager
 from differometor.utils import sigmoid_bounding, update_setup
 import jax.numpy as jnp
+import jax
+from jaxtyping import Array, Float
 from differometor.components import demodulate_signal_power
 import matplotlib.pyplot as plt
 import numpy as np
-import jax
 import optax
+import torch
 import json
 
 
-class VoyagerOptimization:
-    def __init__(self):
+class VoyagerProblem:
+    def __init__(self, name: str = "voyager"):
+        self._name = name.lstrip('_')
         ### Calculate the target sensitivity ###
         # --------------------------------------#
         # use a predefined Voyager setup with one noise detector and two signal detectors
@@ -86,7 +93,9 @@ class VoyagerOptimization:
         # abstract for pure objective_function
         bounds = self._bounds
 
-        def objective_function(optimized_parameters):
+        def objective_function(
+            optimized_parameters: Float[Array, "{self.n_params}"],
+        ) -> Float:
             # map the parameters to between 0 and 1 and then to their respective bounds
             optimized_parameters = sigmoid_bounding(optimized_parameters, bounds)
             carrier, signal, noise = df.simulate_in_parallel(
@@ -103,24 +112,102 @@ class VoyagerOptimization:
         self.objective_function = objective_function
 
     @property
-    def optimization_pairs(self):
+    def optimization_pairs(
+        self,
+    ) -> list[tuple]:  # TODO: Find out what's inside that tuple
         return self._optimization_pairs
 
-    def output_to_files(self, best_params: None, losses: None, population_losses: None):
-        with open("voyager_optimization_parameters.json", "w") as f:
+    @property
+    def n_params(self) -> int:
+        """Number of parameters to be optimized. Is equal to len(self.optimization_pairs)."""
+        return len(self._optimization_pairs)
+
+    def t2j(a):
+        """Convert torch array to jax array."""
+        return jax.dlpack.from_dlpack(a)
+    
+    def j2t(a):
+        """Convert jax array to torch array."""
+        return torch.utils.dlpack.from_dlpack(a)
+
+    def output_to_files(
+        self,
+        best_params: Float[Array, "{self.n_params}"] = None,
+        losses: Float[Array, "iterations"] = None,
+        population_losses: Float[Array, "iterations pop"] = None,
+        algorithm_str: str = "",
+        hyper_param_str: str = "",
+        hyper_param_str_in_filename: bool = True,
+    ) -> None:
+
+        # Prepare strings and timestamp
+        algorithm_str = f"_{algorithm_str.strip('_')}" if algorithm_str != "" else ""
+        hyper_param_str = f"_{hyper_param_str.strip('_')}" if hyper_param_str != "" else ""
+        timestamp = datetime.now().strftime("_%Y-%m-%d_%H-%M")
+
+        
+        # Create output directory
+        output_path = os.path.join(
+            f"./examples/{self._name}/{algorithm_str.strip('_')}",
+            hyper_param_str.strip('_'), # directory should not have leading underscore
+        )
+        os.makedirs(output_path, exist_ok=True)
+
+        # Send info to user
+        print(f"Output directory: {output_path}")
+        
+        # Determine file name prefix and suffix
+        file_prefix = f"{self._name}{algorithm_str}{timestamp}"
+        file_suffix = hyper_param_str if hyper_param_str_in_filename else ""
+
+        # Output best parameters to JSON
+        with open(
+            os.path.join(
+                output_path, f"{file_prefix}_parameters{file_suffix}.json"
+            ),
+            "w",
+        ) as f:
             json.dump(best_params.tolist(), f, indent=4)
 
-        with open("voyager_optimization_losses.json", "w") as f:
-            json.dump(losses, f, indent=4)
+        # Output historical losses to JSON
+        with open(
+            os.path.join(
+                output_path, f"{file_prefix}_losses{file_suffix}.json"
+            ),
+            "w",
+        ) as f:
+            json.dump(losses.tolist(), f, indent=4)
+
+
+        is_genetic = population_losses is not None
 
         plt.figure()
         plt.plot(losses)
-        plt.xlabel("Iteration")
-        plt.ylabel("Loss")
+        plt.xlabel("Generation" if is_genetic else "Iteration")
+        plt.ylabel("Best losses" if is_genetic else "Loss")
         plt.axhline(0, color="red", linestyle="--")
         plt.grid()
         plt.tight_layout()
-        plt.savefig("voyager_optimization_loss.png")
+        plt.savefig(
+            os.path.join(
+                output_path, f"{file_prefix}_losses{file_suffix}.png"
+            )
+        )
+
+        if population_losses is not None:
+            
+            plt.figure()
+            plt.plot(population_losses)
+            plt.xlabel("Generation")
+            plt.ylabel("All losses")
+            plt.axhline(0, color="red", linestyle="--")
+            plt.grid()
+            plt.tight_layout()
+            plt.savefig(
+                os.path.join(
+                    output_path, f"{file_prefix}_population_losses{file_suffix}.png"
+                )
+            )
 
         ### Calculate the sensitivity of the best found setup ###
         # -------------------------------------------------------#
@@ -137,9 +224,7 @@ class VoyagerOptimization:
 
         plt.figure()
         plt.plot(self._frequencies, sensitivity, label="Optimized Sensitivity")
-        plt.plot(
-            self._frequencies, self._target_sensitivity, label="Target Sensitivity"
-        )
+        plt.plot(self._frequencies, self._target_sensitivity, label="Target Sensitivity")
         plt.xscale("log")
         plt.yscale("log")
         plt.xlabel("Frequency (Hz)")
@@ -147,44 +232,82 @@ class VoyagerOptimization:
         plt.legend()
         plt.grid()
         plt.tight_layout()
-        plt.savefig("voyager_optimization_sensitivity.png")
+        plt.savefig(
+            os.path.join(
+                output_path, f"{file_prefix}_sensitivity{file_suffix}.png"
+            )
+        )
 
 
-# Initialize setup
-vo = VoyagerOptimization()
-n_params = len(vo.optimization_pairs)
+class AdamGD:
+    def __init__(
+        self, problem: VoyagerProblem, max_iterations: int = 50000, patience: int = 1000
+    ):
+        """Initialize gradient descent
 
-initial_guess = jnp.array(np.random.uniform(-10, 10, n_params))
+        Args:
+            problem (VoyagerProblem): The problem being optimized
+            max_iterations (int): Maximum number of iterations. Defaults to 50,000
+            patience (int): Stop if no improvement after this many iterations. Defaults to
+        """
+        self._problem = problem
+        self.max_iterations = max_iterations
+        self.patience = patience
+        self._best_params = jnp.array(
+            np.random.uniform(-10, 10, self._problem.n_params)
+        )
+        self._losses = []
+        self._best_loss = 1e10
 
-grad_fn = jax.jit(jax.value_and_grad(vo.objective_function))
-# warmup the function to compile it
-_ = grad_fn(initial_guess)
+        self._grad_fn = jax.jit(jax.value_and_grad(self._problem.objective_function))
 
-optimizer = optax.chain(optax.clip_by_global_norm(1.0), optax.adam(learning_rate=0.1))
-optimizer_state = optimizer.init(initial_guess)
+    def run(self, save_to_file: bool = True, learning_rate: Float = 0.1, **adam_kwargs):
+        """Run optimization with Adam.
 
-best_loss, best_params = 1e10, initial_guess
-params, no_improve_count, losses = initial_guess, 0, []
+        Args:
+            learning_rate (float): Learning rate for Adam optimizer. Defaults to 0.1
+            **adam_kwargs: Additional keyword arguments passed to optax.adam()
+                          (Default: b1=0.9, b2=0.999, eps=1e-8, eps_root=0.0, nesterov=False)
+        """
+        # warmup the function to compile it
+        _ = self._grad_fn(self._best_params)
 
-for i in range(50000):
-    loss, grads = grad_fn(params)
+        optimizer = optax.chain(
+            optax.clip_by_global_norm(1.0), optax.adam(learning_rate, **adam_kwargs)
+        )
+        optimizer_state = optimizer.init(self._best_params)
 
-    if i % 100 == 0:
-        print(f"Iteration {i}: Loss = {loss}")
+        params, no_improve_count, losses = self._best_params, 0, []
 
-    if loss < best_loss - 1e-4:
-        best_loss, best_params, no_improve_count = loss, params, 0
-        print(f"Iteration {i}: New best loss = {loss}")
-    else:
-        no_improve_count += 1
+        for i in range(self.max_iterations):
+            loss, grads = self._grad_fn(params)
 
-    updates, optimizer_state = optimizer.update(grads, optimizer_state, params)
-    params = optax.apply_updates(params, updates)
-    losses.append(float(loss))
+            if i % 100 == 0:
+                print(f"Iteration {i}: Loss = {loss}")
 
-    # if the loss has not improved (< best_loss - 1e-4) over 1000 iterations, stop the optimization
-    if no_improve_count > 1000:
-        break
+            if loss < self._best_loss - 1e-4:
+                self._best_loss, self._best_params, no_improve_count = loss, params, 0
+                print(f"Iteration {i}: New best loss = {loss}")
+            else:
+                no_improve_count += 1
 
-# noqa
-vo.output_to_files(best_params, losses)
+            updates, optimizer_state = optimizer.update(grads, optimizer_state, params)
+            params = optax.apply_updates(params, updates)
+            losses.append(float(loss))
+
+            # if the loss has not improved (< best_loss - 1e-4) over 1000 iterations, stop the optimization
+            if no_improve_count > self.patience:
+                break
+
+        self._losses = jnp.array(losses)
+        
+        
+        if save_to_file:
+            self._problem.output_to_files(best_params=self._best_params, losses=self._losses, algorithm_str="adam", hyper_param_str=f"lr{learning_rate}") # TODO conditionally add more hyperparameters to string
+
+vp = VoyagerProblem()
+
+optimizer = AdamGD(vp, max_iterations=200)
+
+optimizer.run()
+

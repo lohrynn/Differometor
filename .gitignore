@@ -11,3 +11,4 @@ jobfiles_*
 tmp
 uninstall.txt
 .python-version
+examples/voyager

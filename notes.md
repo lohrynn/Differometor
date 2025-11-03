@@ -5,7 +5,7 @@
 
 # Modularization changelog
 I am modularizing voyager_optimization to prepare for other algorithms and hyperparameter optimization. This should later be a subclass of a uifo optmization class which modularizes the more general optimization of a uifo setup. I think that starting with modularizing this more simple optimization is better.
-### Created `class VoyagerOptimization`
+### Created `class VoyagerProblem`
 - Moved much of the setup into `__init__()`
 - Properties are:
   -  `optimization_pairs`
@@ -16,6 +16,7 @@ I am modularizing voyager_optimization to prepare for other algorithms and hyper
   - `j2t(a)`
   - `output_to_files()` see below. TODO better name
 - Variables are (crossed ones were removed as a class variable):
+  - `self._name`: Used for file naming. TODO Should this as an argumentent maybe be moved to `output_to_files()`?
   - `self._setup`: Needed for `update_setup()` at file output.
   - `self._frequencies`: Needed for `df.run()` at file output
   - ~~`self._carrier`~~
@@ -36,10 +37,17 @@ I am modularizing voyager_optimization to prepare for other algorithms and hyper
   - Maybe looking for some magic methods
   - Arguments are:
     - `best_params`: Params for the final setup that get printed
-    - `losses`: List of losses over time to plot
-    - `population_losses`: List of lists of losses representing each pop. Graph could get messy. TODO: find a good plotting representation for high population cases.
+    - `losses`: Array of losses. Decided on arrays for Loss tracking because the other input is also an array. Lists of losses in algorithms will have to be converted. Some algorithms may need to use lists internally because of the "dynamic" stopping criterion. 
+    - `population_losses`: 2D Array of losses for each pop. Graph could get messy. TODO: find a good plotting representation for high population cases.
   - Arguments TODO:
     - Naming scheme and directory. I'm thinking of creating an output directory and adding some string argument to the file name. Also add the date & time to the file name for better sorting. Is it necessary to create an argument to add date & time (defaulting to True)??
+### Planning class `OptimizationAlgorithm`
+- Some base class to implement algorithms
+- Taking in a Problem and hyperparameters and solving
+- Hyperparam optimization
+
+### Added `jaxtyping`
+- Using type annotation like `Float[Array, "iterations pop"]
 
 # Candidate Libraries
 ## PyGAD

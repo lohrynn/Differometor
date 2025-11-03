@@ -26,6 +26,7 @@ dependencies = [
     "torchaudio>=2.9.0",
     "evosax>=0.2.0",
     "ruff>=0.14.3",
+    "jaxtyping>=0.3.3",
 ]
 
 [project.urls]
@@ -36,3 +37,6 @@ Issues = "https://github.com/artificial-scientist-lab/Differometor/issues"
 where = ["."]
 include = ["differometor*"]
 exclude = ["examples", "images"]
+
+[tool.ruff.lint]
+ignore = ["F722", "F821"]
