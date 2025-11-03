@@ -25,6 +25,7 @@ dependencies = [
     "torchvision>=0.24.0",
     "torchaudio>=2.9.0",
     "evosax>=0.2.0",
+    "ruff>=0.14.3",
 ]
 
 [project.urls]
