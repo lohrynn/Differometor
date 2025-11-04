@@ -16,7 +16,7 @@ import json
 import torch
 from evox.algorithms import PSO
 from evox.workflows import StdWorkflow, EvalMonitor
-from evox.core import Problem
+from evox.core import Problem as EvoxProblem
 
 
 ### Calculate the target sensitivity ###
@@ -137,7 +137,7 @@ def j2t(x):
     return torch.utils.dlpack.from_dlpack(x)
 
 
-class VoyagerProblem(Problem):
+class VoyagerProblem(EvoxProblem):
     def __init__(self):
         super().__init__()
         self.vectorized_objective = jax.vmap(objective_function, in_axes=0)
