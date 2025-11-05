@@ -1,4 +1,5 @@
 venv
+.venv
 
 __pycache__
 *.egg-info
@@ -6,3 +7,8 @@ __pycache__
 dist
 uv.lock
 .vscode/settings.json
+jobfiles_*
+tmp
+uninstall.txt
+.python-version
+examples/voyager
