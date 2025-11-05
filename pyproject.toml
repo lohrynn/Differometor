@@ -18,7 +18,6 @@ dependencies = [
     "numpy",
     "matplotlib",
     "tqdm",
-    "pygad>=3.5.0",
     "evox>=1.2.2",
     "torch2jax>=0.1.0",
     "torch>=2.9.0",
