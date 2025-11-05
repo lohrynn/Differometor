@@ -31,4 +31,4 @@ ls $WORK # not necessary just here to illustrate that $WORK is available here
 source $WORK/Differometor/.venv/bin/activate
 
 # Compute Phase
-srun python examples/voyager_evox_pso.py   # srun will automatically pickup the configuration defined via `#SBATCH` and `sbatch` command line arguments
+srun python -m optimization.voyager.voyager_evox_pso   # srun will automatically pickup the configuration defined via `#SBATCH` and `sbatch` command line arguments

@@ -2,6 +2,7 @@ import jax.numpy as jnp
 import jax
 import numpy as np
 import optax
+from jaxtyping import Array, Float
 
 from optimization.optimization_protocols import ContinuousProblem, OptimizationAlgorithm
 
@@ -25,7 +26,7 @@ class AdamGD(OptimizationAlgorithm):
         self._problem = problem
         self.max_iterations = max_iterations
         self.patience = patience
-        self._best_params = jnp.array(
+        self._best_params: Float[Array, "{self._problem.n_params}"] = jnp.array(
             np.random.uniform(-10, 10, self._problem.n_params)
         )
         self._losses = []
@@ -35,7 +36,7 @@ class AdamGD(OptimizationAlgorithm):
 
     def optimize(
         self, save_to_file: bool = True, learning_rate: float = 0.1, **adam_kwargs
-    ):
+    ) -> tuple[]:
         """Run optimization with Adam.
 
         Args:
@@ -82,3 +83,5 @@ class AdamGD(OptimizationAlgorithm):
                 algorithm_str=self.algorithm_str,
                 hyper_param_str=f"lr{learning_rate}",
             )  # TODO conditionally add more hyperparameters to string
+
+        return self._best_params, losses

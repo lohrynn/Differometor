@@ -57,8 +57,8 @@ class EvoxPSO(OptimizationAlgorithm):
 
         Args:
             pop_size (int): Number of particles in the swarm. Defaults to 100
-            n_generations (int): Number of generations to run. Defaults to 1000
-            **pso_kwargs: Additional keyword arguments passed to PSO()
+            n_generations (int): Number of generations to run. Defaults to 100
+            **pso_kwargs: Additional keyword arguments passed to PSO(). (w=0.6, phi_p=2.5, phi_g=0.8)
         """
         # Initiate monitor for loss tracking etc.
         monitor = EvalMonitor()
@@ -102,3 +102,5 @@ class EvoxPSO(OptimizationAlgorithm):
                 algorithm_str=self.algorithm_str,
                 hyper_param_str=hyper_param_str,
             )
+
+        return best_params, losses, population_losses
