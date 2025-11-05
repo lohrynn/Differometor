@@ -7,4 +7,4 @@ vp = VoyagerProblem()
 
 optimizer = AdamGD(vp, max_iterations=200)
 
-optimizer.run()
+optimizer.optimize()

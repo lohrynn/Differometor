@@ -18,7 +18,7 @@ from optimization.optimization_protocols import (
 
 
 class EvoxPSO(OptimizationAlgorithm):
-    name: str = "evox_pso"
+    algorithm_str: str = "evox_pso"
 
     def __init__(self, problem: ContinuousProblem):
         """Initialize EvoX Particle Swarm Optimization (PSO)
@@ -88,7 +88,8 @@ class EvoxPSO(OptimizationAlgorithm):
 
         # Extract results from monitor
         best_params = t2j(monitor.topk_solutions)[0]
-        population_losses = t2j(monitor.fit_history)
+        # jnp.array is used because fit_history is a list of tensors (doesnt have dlpack for t2j)
+        population_losses = jnp.array(monitor.fit_history)
         losses = jnp.min(population_losses, axis=1)
 
         hyper_param_str = f"_gen{n_generations}_pop{pop_size}"

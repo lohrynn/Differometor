@@ -7,6 +7,8 @@ from optimization.optimization_protocols import ContinuousProblem, OptimizationA
 
 
 class AdamGD(OptimizationAlgorithm):
+    algorithm_str: str = "adam"
+
     def __init__(
         self,
         problem: ContinuousProblem,
@@ -77,6 +79,6 @@ class AdamGD(OptimizationAlgorithm):
             self._problem.output_to_files(
                 best_params=self._best_params,
                 losses=self._losses,
-                algorithm_str="adam",
+                algorithm_str=self.algorithm_str,
                 hyper_param_str=f"lr{learning_rate}",
             )  # TODO conditionally add more hyperparameters to string

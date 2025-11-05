@@ -10,8 +10,8 @@ def main():
     # Initialize optimizer
     optimizer = EvoxPSO(problem=vp)
 
-    pop_size = 50
-    num_generations = 10
+    pop_size = 20
+    num_generations = 2
 
     # Run optimization
     optimizer.optimize(pop_size=pop_size, n_generations=num_generations)
