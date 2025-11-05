@@ -29,6 +29,9 @@ dependencies = [
     "jaxtyping>=0.3.3",
 ]
 
+[project.optional-dependencies]
+cuda12 = ["jax[cuda12]==0.8.0"]
+
 [project.urls]
 Homepage = "https://github.com/artificial-scientist-lab/Differometor"
 Issues = "https://github.com/artificial-scientist-lab/Differometor/issues"
