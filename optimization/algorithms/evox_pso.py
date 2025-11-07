@@ -9,12 +9,8 @@ from evox.algorithms import PSO
 from evox.workflows import StdWorkflow, EvalMonitor
 from evox.core import Problem as EvoxProblem
 
-from optimization.optimization_protocols import (
-    t2j,
-    j2t,
-    ContinuousProblem,
-    OptimizationAlgorithm,
-)
+from optimization.protocols import ContinuousProblem, OptimizationAlgorithm
+from optimization.utils import t2j_numpy as t2j, j2t_numpy as j2t
 
 
 class EvoxPSO(OptimizationAlgorithm):
@@ -39,7 +35,9 @@ class EvoxPSO(OptimizationAlgorithm):
 
             def evaluate(self, pop: torch.Tensor) -> torch.Tensor:
                 # EvoX works in torch, this project in JAX
-                return j2t(self.vectorized_objective(t2j(pop)))
+                jpop = t2j(pop)
+                losses = self.vectorized_objective(jpop)
+                return j2t(losses)
 
         # ...and initiate it.
         self._pso_problem = PSOProblem()

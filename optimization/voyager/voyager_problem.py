@@ -16,7 +16,7 @@ import json
 
 
 class VoyagerProblem:
-    def __init__(self, name: str = "voyager"):
+    def __init__(self, name: str = "voyager", n_frequencies: int = 100):
         self._name = name.lstrip("_")
         ### Calculate the target sensitivity ###
         # --------------------------------------#
@@ -24,7 +24,7 @@ class VoyagerProblem:
         self._setup, component_property_pairs = voyager()
 
         # set the frequency range
-        self._frequencies = jnp.logspace(jnp.log10(20), jnp.log10(5000), 100)
+        self._frequencies = jnp.logspace(jnp.log10(20), jnp.log10(5000), n_frequencies)
 
         # run the simulation with the frequency as the changing parameter
         carrier, signal, noise, detector_ports, *_ = df.run(
@@ -92,6 +92,7 @@ class VoyagerProblem:
         # abstract for pure objective_function
         bounds = self._bounds
 
+        @jax.jit
         def objective_function(
             optimized_parameters: Float[Array, "{self.n_params}"],
         ) -> Float:

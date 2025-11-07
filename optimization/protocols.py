@@ -1,21 +1,9 @@
 import os
 
 os.environ["MPLCONFIGDIR"] = "./tmp"  # TODO set this inside the env maybe
-import jax
-import torch
 from jaxtyping import Array, Float
 from typing import Callable
 from abc import abstractmethod, ABC
-
-
-def t2j(a: Array) -> jax.Array:
-    """Convert torch array to jax array."""
-    return jax.dlpack.from_dlpack(a)
-
-
-def j2t(a: Array) -> torch.Tensor:
-    """Convert jax array to torch array."""
-    return torch.utils.dlpack.from_dlpack(a)
 
 
 class ContinuousProblem(ABC):

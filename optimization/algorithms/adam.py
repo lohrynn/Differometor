@@ -4,7 +4,7 @@ import numpy as np
 import optax
 from jaxtyping import Array, Float
 
-from optimization.optimization_protocols import ContinuousProblem, OptimizationAlgorithm
+from optimization.protocols import ContinuousProblem, OptimizationAlgorithm
 
 
 class AdamGD(OptimizationAlgorithm):
@@ -36,7 +36,7 @@ class AdamGD(OptimizationAlgorithm):
 
     def optimize(
         self, save_to_file: bool = True, learning_rate: float = 0.1, **adam_kwargs
-    ) -> tuple[]:
+    ):
         """Run optimization with Adam.
 
         Args:
