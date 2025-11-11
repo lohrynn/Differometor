@@ -1,18 +1,21 @@
 import os
 
 os.environ["MPLCONFIGDIR"] = "./tmp"  # TODO set this inside the env maybe
+
+import json
 from datetime import datetime
-import differometor as df
-from differometor.setups import voyager
-from differometor.utils import sigmoid_bounding, update_setup
-import jax.numpy as jnp
+
 import jax
-from jaxtyping import Array, Float
-from differometor.components import demodulate_signal_power
+import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-import json
+from jaxtyping import Array, Float
+
+import differometor as df
+from differometor.components import demodulate_signal_power
+from differometor.setups import voyager
+from differometor.utils import sigmoid_bounding, update_setup
 
 
 class VoyagerProblem:

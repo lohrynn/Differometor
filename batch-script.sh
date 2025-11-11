@@ -7,19 +7,19 @@
 #SBATCH --cpus-per-task=8          # Number of CPU cores per task
 #SBATCH --nodes=1                  # Ensure that all cores are on the same machine with nodes=1
 #SBATCH --partition=2080-galvani   # Which partition will run your job
-#SBATCH --time=0-00:20
+#SBATCH --time=0-07:00
 #SBATCH --gres=gpu:1               # (optional) Requesting type and number of GPUs
 #SBATCH --mem=50G                  # Total memory pool for all cores (see also --mem-per-cpu); exceeding this number will cause your job to fail.
 #SBATCH --output=./jobfiles_out/myjob-%j.out       # File to which STDOUT will be written - make sure this is not on $HOME
 #SBATCH --error=./jobfiles_err/myjob-%j.err        # File to which STDERR will be written - make sure this is not on $HOME
-#SBATCH --mail-type=ALL            # Type of email notification- BEGIN,END,FAIL,ALL
+#SBATCH --mail-type=END,FAIL            # Type of email notification- BEGIN,END,FAIL,ALL
 #SBATCH --mail-user=laurin.sefa@student.uni-tuebingen.de   # Email to which notifications will be sent
 
 # Diagnostic and Analysis Phase - please leave these in.
 scontrol show job $SLURM_JOB_ID
 pwd
-nvidia-smi # only if you requested gpus
-ls $WORK # not necessary just here to illustrate that $WORK is available here
+# nvidia-smi # only if you requested gpus
+# ls $WORK # not necessary just here to illustrate that $WORK is available here
 
 
 # Setup Phase
@@ -31,4 +31,4 @@ ls $WORK # not necessary just here to illustrate that $WORK is available here
 source $WORK/Differometor/.venv/bin/activate
 
 # Compute Phase
-srun python -m optimization.voyager.voyager_evox_pso   # srun will automatically pickup the configuration defined via `#SBATCH` and `sbatch` command line arguments
+srun python -m optimization.voyager.voyager_evox_pso --batch-size 40 --pop-size 1000 --n-generations 2000

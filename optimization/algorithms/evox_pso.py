@@ -1,34 +1,40 @@
 import os
 
 os.environ["MPLCONFIGDIR"] = "/mnt/lustre/work/krenn/klz895/Differometor/tmp"
-import jax.numpy as jnp
+
 import jax
-from jaxtyping import Array, Float
+import jax.numpy as jnp
 import torch
 from evox.algorithms import PSO
-from evox.workflows import StdWorkflow, EvalMonitor
 from evox.core import Problem as EvoxProblem
+from evox.workflows import EvalMonitor, StdWorkflow
+from jaxtyping import Array, Float
 
 from optimization.protocols import ContinuousProblem, OptimizationAlgorithm
-from optimization.utils import t2j_numpy as t2j, j2t_numpy as j2t
+from optimization.utils import j2t_numpy as j2t
+from optimization.utils import t2j_numpy as t2j
 
 
 class EvoxPSO(OptimizationAlgorithm):
     algorithm_str: str = "evox_pso"
 
-    def __init__(self, problem: ContinuousProblem):
+    def __init__(self, problem: ContinuousProblem, batch_size: int = 5):
         """Initialize EvoX Particle Swarm Optimization (PSO)
 
         Args:
             problem (ContinuousProblem): The problem being optimized
+            batch_size (int): Number of particles to evaluate simultaneously.
+                             Reduce this if you get OOM errors. Defaults to 5.
         """
         self._problem = problem
+        self._batch_size = batch_size
 
         # Define the problem in EvoX so it can be optimized
         class PSOProblem(EvoxProblem):
-            def __init__(self):
+            def __init__(self, batch_size):
                 super().__init__()
-                # vmap for whole population
+                self.batch_size = batch_size
+                # vmap for a single batch
                 self.vectorized_objective = jax.vmap(
                     problem.objective_function, in_axes=0
                 )
@@ -36,11 +42,22 @@ class EvoxPSO(OptimizationAlgorithm):
             def evaluate(self, pop: torch.Tensor) -> torch.Tensor:
                 # EvoX works in torch, this project in JAX
                 jpop = t2j(pop)
-                losses = self.vectorized_objective(jpop)
+
+                # Split population into batches to avoid OOM
+                n_particles = jpop.shape[0]
+                all_losses = []
+
+                for i in range(0, n_particles, self.batch_size):
+                    batch = jpop[i : i + self.batch_size]
+                    batch_losses = self.vectorized_objective(batch)
+                    all_losses.append(batch_losses)
+
+                # Concatenate all batch results
+                losses = jnp.concatenate(all_losses, axis=0)
                 return j2t(losses)
 
         # ...and initiate it.
-        self._pso_problem = PSOProblem()
+        self._pso_problem = PSOProblem(self._batch_size)
 
     def optimize(
         self,
@@ -81,7 +98,7 @@ class EvoxPSO(OptimizationAlgorithm):
         )
 
         # Executing the algorithm itself
-        for _ in range(n_generations):
+        for gen in range(n_generations):
             workflow.step()
 
         # Extract results from monitor

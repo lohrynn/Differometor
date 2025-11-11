@@ -1,9 +1,11 @@
 import os
 
 os.environ["MPLCONFIGDIR"] = "./tmp"  # TODO set this inside the env maybe
-from jaxtyping import Array, Float
+
+from abc import ABC, abstractmethod
 from typing import Callable
-from abc import abstractmethod, ABC
+
+from jaxtyping import Array, Float
 
 
 class ContinuousProblem(ABC):

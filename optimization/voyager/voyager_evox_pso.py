@@ -1,17 +1,14 @@
-from optimization.voyager.voyager_problem import VoyagerProblem
-from optimization.algorithms.evox_pso import EvoxPSO
-from optimization.config import create_parser
-
-import jax
-
 import cProfile
 import pstats
+
+from optimization import EvoxPSO, VoyagerProblem, create_parser
 
 
 def main():
     """Run Voyager optimization using EvoX PSO algorithm."""
     params = {
-        "pop_size": 10,
+        "batch_size": 5,
+        "pop_size": 50,
         "n_generations": 10,
     }
     parser = create_parser(params, description="Voyager PSO Optimization")
@@ -20,21 +17,13 @@ def main():
     # Initialize problem
     vp = VoyagerProblem()
 
-    # Initialize optimizer
-    optimizer = EvoxPSO(problem=vp)
+    # Initialize optimizer with batch_size to control memory usage
+    # Start with batch_size=5, increase if you have memory to spare
+    optimizer = EvoxPSO(problem=vp, batch_size=args.batch_size)
 
     # Run optimization
     optimizer.optimize(pop_size=args.pop_size, n_generations=args.n_generations)
 
 
 if __name__ == "__main__":
-    profiler = cProfile.Profile()
-    profiler.enable()
-
     main()
-
-    profiler.disable()
-    stats = pstats.Stats(profiler)
-    stats.dump_stats("voyager_profile.prof")
-    print("\nProfile saved to voyager_profile.prof")
-    print("View with: snakeviz voyager_profile.prof")

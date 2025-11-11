@@ -1,5 +1,4 @@
-from optimization.voyager.voyager_problem import VoyagerProblem
-from optimization.algorithms.adam import AdamGD
+from optimization import VoyagerProblem, AdamGD
 
 # Whole workflow of opimization with adam
 

@@ -1,6 +1,6 @@
 import jax
-import torch
 import numpy as np
+import torch
 from jaxtyping import Array
 
 
