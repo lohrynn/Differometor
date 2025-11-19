@@ -7,7 +7,11 @@ Provides optimization algorithms and problem definitions.
 from optimization.protocols import (
     ContinuousProblem,
     OptimizationAlgorithm,
+    AlgorithmType,
 )
+# Import utilities
+from optimization.config import create_parser
+from optimization.utils import t2j, j2t, t2j_numpy, j2t_numpy
 
 # Import algorithms
 from optimization.algorithms.evox_pso import EvoxPSO
@@ -16,19 +20,22 @@ from optimization.algorithms.adam import AdamGD
 # Import problems
 from optimization.voyager.voyager_problem import VoyagerProblem
 
-# Import utilities
-from optimization.config import create_parser
-from optimization.utils import t2j, j2t, t2j_numpy, j2t_numpy
+# Import HPO tools
+from optimization.hpo.hpo import HyperparameterVisualizer
+
 
 __all__ = [
     # Protocols
     "ContinuousProblem",
     "OptimizationAlgorithm",
+    "AlgorithmType",
     # Algorithms
     "EvoxPSO",
     "AdamGD",
     # Problems
     "VoyagerProblem",
+    # HPOs
+    "HyperparameterVisualizer",
     # Utilities
     "create_parser",
     "t2j",

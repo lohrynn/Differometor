@@ -6,10 +6,19 @@ from abc import ABC, abstractmethod
 from typing import Callable
 
 from jaxtyping import Array, Float
+from enum import Enum
+
+
+class AlgorithmType(Enum):
+    GRADIENT_BASED = "gradient_based"
+    EVOLUTIONARY = "evolutionary"
+    BAYESIAN = "bayesian"
+    DIFFUSION_BASED = "diffusion_based"
 
 
 class ContinuousProblem(ABC):
     name: str
+    algorithm_type: AlgorithmType
 
     objective_function: Callable[[Float[Array, "{self.n_params}"]], Float]
 

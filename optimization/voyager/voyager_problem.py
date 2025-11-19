@@ -125,13 +125,28 @@ class VoyagerProblem:
         """Number of parameters to be optimized. Is equal to len(self.optimization_pairs)."""
         return len(self._optimization_pairs)
 
-    def t2j(a):
-        """Convert torch array to jax array."""
-        return jax.dlpack.from_dlpack(a)
+    @property
+    def frequencies(self) -> Float[Array, "n_frequencies"]:
+        """Frequencies at which the sensitivity is calculated."""
+        return self._frequencies
 
-    def j2t(a):
-        """Convert jax array to torch array."""
-        return torch.utils.dlpack.from_dlpack(a)
+    def calculate_sensitivity(
+        self,
+        optimized_parameters: Float[Array, "{self.n_params}"],
+    ) -> Float[Array, "n_frequencies"]:
+        update_setup(
+            optimized_parameters, self._optimization_pairs, self._bounds, self._setup
+        )
+
+        carrier, signal, noise, detector_ports, *_ = df.run(
+            self._setup, [("f", "frequency")], self._frequencies
+        )
+        powers = demodulate_signal_power(carrier, signal)
+        powers = powers[detector_ports]
+        powers = powers[0] - powers[1]
+        sensitivity = noise / jnp.abs(powers)
+
+        return sensitivity
 
     def output_to_files(
         self,
@@ -211,15 +226,7 @@ class VoyagerProblem:
         ### Calculate the sensitivity of the best found setup ###
         # -------------------------------------------------------#
 
-        update_setup(best_params, self._optimization_pairs, self._bounds, self._setup)
-
-        carrier, signal, noise, detector_ports, *_ = df.run(
-            self._setup, [("f", "frequency")], self._frequencies
-        )
-        powers = demodulate_signal_power(carrier, signal)
-        powers = powers[detector_ports]
-        powers = powers[0] - powers[1]
-        sensitivity = noise / jnp.abs(powers)
+        sensitivity = self.calculate_sensitivity(best_params)
 
         plt.figure()
         plt.plot(self._frequencies, sensitivity, label="Optimized Sensitivity")

@@ -2,13 +2,15 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
+import time
 from jaxtyping import Array, Float
 
-from optimization.protocols import ContinuousProblem, OptimizationAlgorithm
+from optimization.protocols import ContinuousProblem, OptimizationAlgorithm, AlgorithmType
 
 
 class AdamGD(OptimizationAlgorithm):
     algorithm_str: str = "adam"
+    algorithm_type: AlgorithmType = AlgorithmType.GRADIENT_BASED
 
     def __init__(
         self,
@@ -35,7 +37,7 @@ class AdamGD(OptimizationAlgorithm):
         self._grad_fn = jax.jit(jax.value_and_grad(self._problem.objective_function))
 
     def optimize(
-        self, save_to_file: bool = True, learning_rate: float = 0.1, **adam_kwargs
+        self, save_to_file: bool = True, wall_time: float = None, learning_rate: float = 0.1, **adam_kwargs
     ):
         """Run optimization with Adam.
 
@@ -54,6 +56,8 @@ class AdamGD(OptimizationAlgorithm):
 
         params, no_improve_count, losses = self._best_params, 0, []
 
+
+        start_time = time.time() if wall_time is not None else None
         for i in range(self.max_iterations):
             loss, grads = self._grad_fn(params)
 
@@ -72,6 +76,9 @@ class AdamGD(OptimizationAlgorithm):
 
             # if the loss has not improved (< best_loss - 1e-4) over 1000 iterations, stop the optimization
             if no_improve_count > self.patience:
+                break
+            # if time limit is set, stop if exceeded
+            if wall_time is not None and (time.time() - start_time) > wall_time:
                 break
 
         self._losses = jnp.array(losses)

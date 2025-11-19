@@ -1,7 +1,35 @@
+# Short-Term TODO
+- Add outputs at the end of an algorithm to continue later on
+- 
+
 # Notes
 - Eine gute Initialisierung immer als richtlinie währed optimierung
 - Stabilität bei Initialisierung charakterisieren
 - Man kann noch eininges viel modularer machen! Aber erstmal verschiedene Algos ausprobieren von EvoX
+
+# Metric notes
+
+## PMO Benchmark
+- AUC of top-K average property value vs. calls (min-max scaled to [0,1])
+
+## Tartarus
+- Average of best fitness (+std)
+- Initialization time
+- Time per call
+- Total wall clock time (if limited budget of calls)
+- Solution Diversity (Euclid distance)
+- (Rate of success, Time to success)
+
+## GuacaMol / Moses
+- Solution Diversity
+- (Validity: Rate of success)
+- Rest not applicable (has to do with input data)
+- Maybe for Voyager: Similarity to voyager parameters
+- MOSES: Similarity to Nearest Neighbor
+
+## Dockstring
+- (Calls to sucess, loss as a fx of call)
+- (other irrelevant metrics for our case)
 
 # Modularization changelog
 I am modularizing voyager_optimization to prepare for other algorithms and hyperparameter optimization. This should later be a subclass of a uifo optmization class which modularizes the more general optimization of a uifo setup. I think that starting with modularizing this more simple optimization is better.

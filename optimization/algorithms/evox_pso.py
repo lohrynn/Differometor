@@ -5,18 +5,24 @@ os.environ["MPLCONFIGDIR"] = "/mnt/lustre/work/krenn/klz895/Differometor/tmp"
 import jax
 import jax.numpy as jnp
 import torch
+import time
 from evox.algorithms import PSO
 from evox.core import Problem as EvoxProblem
 from evox.workflows import EvalMonitor, StdWorkflow
 from jaxtyping import Array, Float
 
-from optimization.protocols import ContinuousProblem, OptimizationAlgorithm
-from optimization.utils import j2t_numpy as j2t
-from optimization.utils import t2j_numpy as t2j
+from optimization import (
+    ContinuousProblem,
+    OptimizationAlgorithm,
+    AlgorithmType,
+    j2t_numpy as j2t,
+    t2j_numpy as t2j,
+)
 
 
 class EvoxPSO(OptimizationAlgorithm):
     algorithm_str: str = "evox_pso"
+    algorithm_type: AlgorithmType = AlgorithmType.EVOLUTIONARY
 
     def __init__(self, problem: ContinuousProblem, batch_size: int = 5):
         """Initialize EvoX Particle Swarm Optimization (PSO)
@@ -62,6 +68,7 @@ class EvoxPSO(OptimizationAlgorithm):
     def optimize(
         self,
         save_to_file: bool = True,
+        wall_time: float = None,
         pop_size: int = 100,
         n_generations: int = 100,
         lb: Float[Array, "{self._problem.n_params}"] = None,
@@ -71,6 +78,7 @@ class EvoxPSO(OptimizationAlgorithm):
         """Run optimization with EvoX PSO.
 
         Args:
+            save_to_file (bool): Whether to save results to file. Defaults to True
             pop_size (int): Number of particles in the swarm. Defaults to 100
             n_generations (int): Number of generations to run. Defaults to 100
             **pso_kwargs: Additional keyword arguments passed to PSO(). (w=0.6, phi_p=2.5, phi_g=0.8)
@@ -98,8 +106,23 @@ class EvoxPSO(OptimizationAlgorithm):
         )
 
         # Executing the algorithm itself
-        for gen in range(n_generations):
-            workflow.step()
+        
+        # If there is no time limit:
+        if wall_time is None:
+            for gen in range(n_generations):
+                workflow.step()
+        else:
+            start_time = time.time()
+            # With both time limit and generation limit:
+            if n_generations is not None:
+                for _ in range(n_generations):
+                    if (time.time() - start_time) >= wall_time:
+                        break
+                    workflow.step()
+            # With only time limit:
+            else:
+                while (time.time() - start_time) < wall_time:
+                    workflow.step()
 
         # Extract results from monitor
         best_params = t2j(monitor.topk_solutions)[0]
