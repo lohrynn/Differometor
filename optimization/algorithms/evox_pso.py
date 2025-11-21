@@ -44,6 +44,10 @@ class EvoxPSO(OptimizationAlgorithm):
                 self.vectorized_objective = jax.vmap(
                     problem.objective_function, in_axes=0
                 )
+                # warmup the function to compile it
+                _ = self.vectorized_objective(
+                    jnp.zeros((self.batch_size, problem.n_params))
+                )
 
             def evaluate(self, pop: torch.Tensor) -> torch.Tensor:
                 # EvoX works in torch, this project in JAX
@@ -68,9 +72,10 @@ class EvoxPSO(OptimizationAlgorithm):
     def optimize(
         self,
         save_to_file: bool = True,
-        wall_time: float = None,
+        return_best_params_history: bool = False,
+        wall_time: float | None = None,
         pop_size: int = 100,
-        n_generations: int = 100,
+        n_generations: int | None = None,
         lb: Float[Array, "{self._problem.n_params}"] = None,
         ub: Float[Array, "{self._problem.n_params}"] = None,
         **pso_kwargs,
@@ -106,29 +111,43 @@ class EvoxPSO(OptimizationAlgorithm):
         )
 
         # Executing the algorithm itself
-        
+        best_params_history = []  # Shape: (n_generations, n_params)
+
         # If there is no time limit:
         if wall_time is None:
-            for gen in range(n_generations):
+            for _ in range(n_generations):
                 workflow.step()
+                if return_best_params_history:
+                    best_params = t2j(monitor.topk_solutions)[0]
+                    best_params_history.append(best_params)
         else:
             start_time = time.time()
             # With both time limit and generation limit:
             if n_generations is not None:
-                for _ in range(n_generations):
+                for gen in range(n_generations):
                     if (time.time() - start_time) >= wall_time:
                         break
                     workflow.step()
+                    if return_best_params_history:
+                        best_params = t2j(monitor.topk_solutions)[0]
+                        best_params_history.append(best_params)
             # With only time limit:
             else:
                 while (time.time() - start_time) < wall_time:
                     workflow.step()
+                    if return_best_params_history:
+                        best_params = t2j(monitor.topk_solutions)[0]
+                        best_params_history.append(best_params)
 
         # Extract results from monitor
         best_params = t2j(monitor.topk_solutions)[0]
+        best_params_history = jnp.array(best_params_history)
         # jnp.array is used because fit_history is a list of tensors (doesnt have dlpack for t2j)
         population_losses = jnp.array(monitor.fit_history)
         losses = jnp.min(population_losses, axis=1)
+
+        print("Best params history shape:")
+        print(best_params_history.shape)
 
         hyper_param_str = f"_gen{n_generations}_pop{pop_size}"
 
@@ -141,4 +160,4 @@ class EvoxPSO(OptimizationAlgorithm):
                 hyper_param_str=hyper_param_str,
             )
 
-        return best_params, losses, population_losses
+        return best_params, best_params_history, losses, population_losses

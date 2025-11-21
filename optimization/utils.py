@@ -20,5 +20,8 @@ def t2j_numpy(tensor: torch.Tensor) -> jax.Array:
 
 
 def j2t_numpy(arr: jax.Array) -> torch.Tensor:
-    """Convert JAX array to torch tensor via NumPy."""
-    return torch.from_numpy(np.asarray(arr))
+    """Convert JAX array to torch tensor via NumPy.
+    
+    Creates a writable copy to avoid PyTorch warnings about non-writable arrays.
+    """
+    return torch.from_numpy(np.array(arr))

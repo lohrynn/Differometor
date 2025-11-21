@@ -7,7 +7,7 @@
 #SBATCH --cpus-per-task=8          # Number of CPU cores per task
 #SBATCH --nodes=1                  # Ensure that all cores are on the same machine with nodes=1
 #SBATCH --partition=a100-galvani   # Which partition will run your job
-#SBATCH --time=0-00:30
+#SBATCH --time=0-00:58
 #SBATCH --gres=gpu:1               # (optional) Requesting type and number of GPUs
 #SBATCH --mem=50G                  # Total memory pool for all cores (see also --mem-per-cpu); exceeding this number will cause your job to fail.
 #SBATCH --output=./jobfiles_out/myjob-%j.out       # File to which STDOUT will be written - make sure this is not on $HOME
@@ -31,4 +31,4 @@ pwd
 source $WORK/Differometor/.venv/bin/activate
 
 # Compute Phase
-srun python -m optimization.voyager.voyager_evox_pso --batch-size 125 --pop-size 500 --n-generations 200
+srun python -m optimization.voyager.voyager_benchmark

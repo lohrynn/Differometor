@@ -5,7 +5,6 @@ from optimization import (
     EvoxPSO,
     VoyagerProblem,
     create_parser,
-    HyperparameterVisualizer,
 )
 
 

@@ -31,6 +31,17 @@
 - (Calls to sucess, loss as a fx of call)
 - (other irrelevant metrics for our case)
 
+# Benchmark notes
+
+- Random Seed TODO
+  - Need to adapt algorithm implementations
+- Runs that complete fewer iterations in the same time are getting edge padded (assuming convergence)
+- If wall_time is given to adam, any iteration limits are currently ignored.
+  - Would this be needed?
+  - It's implemented in PSO
+- Cool plots could be a good idea for Benchmark results.
+- Why was AUC sinking in the first runs?
+
 # Modularization changelog
 I am modularizing voyager_optimization to prepare for other algorithms and hyperparameter optimization. This should later be a subclass of a uifo optmization class which modularizes the more general optimization of a uifo setup. I think that starting with modularizing this more simple optimization is better.
 ### HOW TO USE

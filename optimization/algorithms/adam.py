@@ -37,11 +37,19 @@ class AdamGD(OptimizationAlgorithm):
         self._grad_fn = jax.jit(jax.value_and_grad(self._problem.objective_function))
 
     def optimize(
-        self, save_to_file: bool = True, wall_time: float = None, learning_rate: float = 0.1, **adam_kwargs
+        self,
+        save_to_file: bool = True,
+        return_best_params_history: bool = False,
+        wall_time: float = None,
+        learning_rate: float = 0.1,
+        **adam_kwargs
     ):
         """Run optimization with Adam.
 
         Args:
+            save_to_file (bool): Whether to save results to file. Defaults to True
+            return_best_params_history (bool): Whether to track best params at each iteration. Defaults to False
+            wall_time (float): Maximum wall time in seconds. Defaults to None
             learning_rate (float): Learning rate for Adam optimizer. Defaults to 0.1
             **adam_kwargs: Additional keyword arguments passed to optax.adam()
                           (Default: b1=0.9, b2=0.999, eps=1e-8, eps_root=0.0, nesterov=False)
@@ -54,34 +62,58 @@ class AdamGD(OptimizationAlgorithm):
         )
         optimizer_state = optimizer.init(self._best_params)
 
-        params, no_improve_count, losses = self._best_params, 0, []
+        params, losses = self._best_params, []
+        best_params_history = []  # Shape: (iterations, n_params)
 
+        # Separate loops for wall-time constrained vs iteration/patience constrained
+        if wall_time is not None:
+            # Wall-time constrained: ignore max_iterations and patience
+            start_time = time.time()
+            i = 0
+            while (time.time() - start_time) < wall_time:
+                loss, grads = self._grad_fn(params)
 
-        start_time = time.time() if wall_time is not None else None
-        for i in range(self.max_iterations):
-            loss, grads = self._grad_fn(params)
+                if i % 100 == 0:
+                    print(f"Iteration {i}: Loss = {loss}")
 
-            if i % 100 == 0:
-                print(f"Iteration {i}: Loss = {loss}")
+                if loss < self._best_loss - 1e-4:
+                    self._best_loss, self._best_params = loss, params
+                    print(f"Iteration {i}: New best loss = {loss}")
 
-            if loss < self._best_loss - 1e-4:
-                self._best_loss, self._best_params, no_improve_count = loss, params, 0
-                print(f"Iteration {i}: New best loss = {loss}")
-            else:
-                no_improve_count += 1
+                if return_best_params_history:
+                    best_params_history.append(self._best_params)
 
-            updates, optimizer_state = optimizer.update(grads, optimizer_state, params)
-            params = optax.apply_updates(params, updates)
-            losses.append(float(loss))
+                updates, optimizer_state = optimizer.update(grads, optimizer_state, params)
+                params = optax.apply_updates(params, updates)
+                losses.append(float(loss))
+                i += 1
+        else:
+            # Iteration/patience constrained
+            no_improve_count = 0
+            for i in range(self.max_iterations):
+                loss, grads = self._grad_fn(params)
 
-            # if the loss has not improved (< best_loss - 1e-4) over 1000 iterations, stop the optimization
-            if no_improve_count > self.patience:
-                break
-            # if time limit is set, stop if exceeded
-            if wall_time is not None and (time.time() - start_time) > wall_time:
-                break
+                if i % 100 == 0:
+                    print(f"Iteration {i}: Loss = {loss}")
+
+                if loss < self._best_loss - 1e-4:
+                    self._best_loss, self._best_params, no_improve_count = loss, params, 0
+                    print(f"Iteration {i}: New best loss = {loss}")
+                else:
+                    no_improve_count += 1
+
+                if return_best_params_history:
+                    best_params_history.append(self._best_params)
+
+                updates, optimizer_state = optimizer.update(grads, optimizer_state, params)
+                params = optax.apply_updates(params, updates)
+                losses.append(float(loss))
+
+                if no_improve_count > self.patience:
+                    break
 
         self._losses = jnp.array(losses)
+        self._best_params_history = jnp.array(best_params_history) if return_best_params_history else None
 
         if save_to_file:
             self._problem.output_to_files(
@@ -89,6 +121,6 @@ class AdamGD(OptimizationAlgorithm):
                 losses=self._losses,
                 algorithm_str=self.algorithm_str,
                 hyper_param_str=f"lr{learning_rate}",
-            )  # TODO conditionally add more hyperparameters to string
+            )  # TODO maybe conditionally add more hyperparameters to string
 
-        return self._best_params, losses
+        return self._best_params, self._best_params_history, self._losses

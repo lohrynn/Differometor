@@ -20,8 +20,8 @@ from optimization.algorithms.adam import AdamGD
 # Import problems
 from optimization.voyager.voyager_problem import VoyagerProblem
 
-# Import HPO tools
-from optimization.hpo.hpo import HyperparameterVisualizer
+# Import benchamrking
+from optimization.benchmark.benchmark import Benchmark, AlgorithmConfig
 
 
 __all__ = [
@@ -34,12 +34,13 @@ __all__ = [
     "AdamGD",
     # Problems
     "VoyagerProblem",
-    # HPOs
-    "HyperparameterVisualizer",
     # Utilities
     "create_parser",
     "t2j",
     "j2t",
     "t2j_numpy",
     "j2t_numpy",
+    # Benchmarking
+    "Benchmark",
+    "AlgorithmConfig",
 ]
