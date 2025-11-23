@@ -1,6 +1,10 @@
 # Short-Term TODO
 - Add outputs at the end of an algorithm to continue later on
-- 
+- ~~Fix adam to start over for the next optimize() call~~
+  > Implemented a way of initializing its parameters
+- ~~Find out how to initialize PSO population~~
+- Implement a class that handles all evox algorithms
+  - Derive many different optimizers from this one
 
 # Notes
 - Eine gute Initialisierung immer als richtlinie währed optimierung

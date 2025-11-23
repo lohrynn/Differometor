@@ -3,12 +3,19 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 import time
-from jaxtyping import Array, Float
+from jaxtyping import Array, Float, jaxtyped
+from beartype import beartype as typechecker
 
 from optimization.protocols import ContinuousProblem, OptimizationAlgorithm, AlgorithmType
 
 
 class AdamGD(OptimizationAlgorithm):
+    """Adam Gradient Descent optimization algorithm.
+    
+    Implements gradient-based optimization using the Adam optimizer from Optax.
+    Includes gradient clipping and early stopping based on patience.
+    """
+    
     algorithm_str: str = "adam"
     algorithm_type: AlgorithmType = AlgorithmType.GRADIENT_BASED
 
@@ -17,44 +24,64 @@ class AdamGD(OptimizationAlgorithm):
         problem: ContinuousProblem,
         max_iterations: int = 50000,
         patience: int = 1000,
-    ):
-        """Initialize gradient descent
+    ) -> None:
+        """Initialize Adam Gradient Descent optimizer.
 
         Args:
-            problem (ContinuousProblem): The problem being optimized
-            max_iterations (int): Maximum number of iterations. Defaults to 50,000
-            patience (int): Stop if no improvement after this many iterations. Defaults to
+            problem (ContinuousProblem): The continuous optimization problem to solve.
+            max_iterations (int): Maximum number of optimization iterations. Defaults to 50,000.
+            patience (int): Stop if no improvement (>1e-4) after this many iterations. 
+                Only applies when wall_time is not set. Defaults to 1,000.
         """
         self._problem = problem
         self.max_iterations = max_iterations
         self.patience = patience
-        best_params: Float[Array, "{self._problem.n_params}"] = jnp.array(
-            np.random.uniform(-10, 10, self._problem.n_params)
-        )
-        losses = []
-        best_loss = 1e10
 
         self._grad_fn = jax.jit(jax.value_and_grad(self._problem.objective_function))
 
+    @jaxtyped(typechecker=typechecker)
     def optimize(
         self,
         save_to_file: bool = True,
-        init_params: Float[Array, "{self._problem.n_params}"] = None,
+        init_params: Float[Array, "{self._problem.n_params}"] | None = None,
         return_best_params_history: bool = False,
-        wall_time: float = None,
+        random_seed: int | None = None,
+        wall_time: float | None = None,
         learning_rate: float = 0.1,
         **adam_kwargs
-    ):
-        """Run optimization with Adam.
+    ) -> tuple[
+        Float[Array, "{self._problem.n_params}"],
+        Float[Array, "n_iters {self._problem.n_params}"] | None,
+        Float[Array, "n_iters"]
+    ]:
+        """Run Adam gradient descent optimization.ptimization.
 
         Args:
-            save_to_file (bool): Whether to save results to file. Defaults to True
-            return_best_params_history (bool): Whether to track best params at each iteration. Defaults to False
-            wall_time (float): Maximum wall time in seconds. Defaults to None
-            learning_rate (float): Learning rate for Adam optimizer. Defaults to 0.1
-            **adam_kwargs: Additional keyword arguments passed to optax.adam()
-                          (Default: b1=0.9, b2=0.999, eps=1e-8, eps_root=0.0, nesterov=False)
+            save_to_file (bool): Whether to save optimization results to file. Defaults to True.
+            init_params (Float[Array, "n_params"] | None): Initial parameters. If None, 
+                randomly initialized in range [-10, 10]. Defaults to None.
+            return_best_params_history (bool): Whether to track best parameters at each 
+                iteration. Defaults to False.
+            random_seed (int | None): Random seed for reproducibility. Controls initial 
+                parameter generation when init_params is None. Defaults to None.
+            wall_time (float | None): Maximum wall-clock time in seconds. If None, runs for 
+                max_iterations or until patience is exceeded. Defaults to None.
+            learning_rate (float): Learning rate for Adam optimizer. Defaults to 0.1.
+            **adam_kwargs: Additional keyword arguments passed to optax.adam().
+                Common options: b1 (float, default 0.9), b2 (float, default 0.999), 
+                eps (float, default 1e-8), eps_root (float, default 0.0), 
+                nesterov (bool, default False).
+
+        Returns:
+            tuple: A 3-tuple containing:
+                - best_params (Float[Array, "n_params"]): Best parameters found.
+                - best_params_history (Float[Array, "n_iters n_params"] | None): History of 
+                  best parameters per iteration. None if return_best_params_history=False.
+                - losses (Float[Array, "n_iters"]): Loss at each iteration.
         """
+        # Set random seed if provided (affects initial parameter generation)
+        if random_seed is not None:
+            np.random.seed(random_seed)
         
         # Initialize parameters
         best_params: Float[Array, "{self._problem.n_params}"] = jnp.array(

@@ -9,7 +9,8 @@ import time
 from evox.algorithms import PSO
 from evox.core import Problem as EvoxProblem
 from evox.workflows import EvalMonitor, StdWorkflow
-from jaxtyping import Array, Float
+from jaxtyping import Array, Float, jaxtyped
+from beartype import beartype as typechecker
 
 from optimization import (
     ContinuousProblem,
@@ -21,16 +22,22 @@ from optimization import (
 
 
 class EvoxPSO(OptimizationAlgorithm):
+    """EvoX-based Particle Swarm Optimization algorithm.
+    
+    Implements PSO using the EvoX library with JAX backend. Handles batched
+    evaluation of particles to manage memory efficiently.
+    """
+    
     algorithm_str: str = "evox_pso"
     algorithm_type: AlgorithmType = AlgorithmType.EVOLUTIONARY
 
-    def __init__(self, problem: ContinuousProblem, batch_size: int = 5):
-        """Initialize EvoX Particle Swarm Optimization (PSO)
+    def __init__(self, problem: ContinuousProblem, batch_size: int = 5) -> None:
+        """Initialize EvoX Particle Swarm Optimization.
 
         Args:
-            problem (ContinuousProblem): The problem being optimized
-            batch_size (int): Number of particles to evaluate simultaneously.
-                             Reduce this if you get OOM errors. Defaults to 5.
+            problem (ContinuousProblem): The continuous optimization problem to solve.
+            batch_size (int): Number of particles to evaluate simultaneously in each batch.
+                Reduce this value if encountering out-of-memory errors. Defaults to 5.
         """
         self._problem = problem
         self._batch_size = batch_size
@@ -69,28 +76,66 @@ class EvoxPSO(OptimizationAlgorithm):
         # ...and initiate it.
         self._pso_problem = PSOProblem(self._batch_size)
 
+    @jaxtyped(typechecker=typechecker)
     def optimize(
         self,
         save_to_file: bool = True,
+        init_params_pop: Float[Array, "{pop_size} {self._problem.n_params}"] | None = None,
         return_best_params_history: bool = False,
+        random_seed: int | None = None,
         wall_time: float | None = None,
         pop_size: int = 100,
         n_generations: int | None = None,
-        lb: Float[Array, "{self._problem.n_params}"] = None,
-        ub: Float[Array, "{self._problem.n_params}"] = None,
+        lb: Float[Array, "{self._problem.n_params}"] | None = None,
+        ub: Float[Array, "{self._problem.n_params}"] | None = None,
         **pso_kwargs,
-    ):
-        """Run optimization with EvoX PSO.
+    ) -> tuple[
+        Float[Array, "{self._problem.n_params}"],
+        Float[Array, "n_gens {self._problem.n_params}"],
+        Float[Array, "n_gens"],
+        Float[Array, "n_gens {pop_size}"]
+    ]:
+        """Run PSO optimization.
 
         Args:
-            save_to_file (bool): Whether to save results to file. Defaults to True
-            pop_size (int): Number of particles in the swarm. Defaults to 100
-            n_generations (int): Number of generations to run. Defaults to 100
-            **pso_kwargs: Additional keyword arguments passed to PSO(). (w=0.6, phi_p=2.5, phi_g=0.8)
+            save_to_file (bool): Whether to save optimization results to file. Defaults to True.
+            init_params_pop (Float[Array, "pop_size n_params"] | None): Initial population of 
+                parameters. If None, randomly initialized within bounds. Defaults to None.
+            return_best_params_history (bool): Whether to track best parameters at each 
+                generation. Defaults to False.
+            random_seed (int | None): Random seed for reproducibility. Controls both initial 
+                population generation and random coefficients during optimization. Defaults to None.
+            wall_time (float | None): Maximum wall-clock time in seconds. If None, runs for 
+                n_generations. Defaults to None.
+            pop_size (int): Number of particles in the swarm. Defaults to 100.
+            n_generations (int | None): Number of generations to run. Required if wall_time 
+                is None. Defaults to None.
+            lb (Float[Array, "n_params"] | None): Lower bounds for each parameter. If None, 
+                uses -10 for all parameters. Defaults to None.
+            ub (Float[Array, "n_params"] | None): Upper bounds for each parameter. If None, 
+                uses 10 for all parameters. Defaults to None.
+            **pso_kwargs: Additional keyword arguments passed to EvoX PSO constructor.
+                Common options: w (float, inertia weight, default 0.6), phi_p (float, 
+                cognitive coefficient, default 2.5), phi_g (float, social coefficient, 
+                default 0.8).
+
+        Returns:
+            tuple: A 4-tuple containing:
+                - best_params (Float[Array, "n_params"]): Best parameters found.
+                - best_params_history (Float[Array, "n_gens n_params"]): History of best 
+                  parameters per generation. Empty array if return_best_params_history=False.
+                - losses (Float[Array, "n_gens"]): Best loss at each generation.
+                - population_losses (Float[Array, "n_gens pop_size"]): Loss for each particle 
+                  at each generation.
         """
+        # Set random seed if provided (affects both initialization and step randomness)
+        if random_seed is not None:
+            torch.manual_seed(random_seed)
+        
         # Initiate monitor for loss tracking etc.
         monitor = EvalMonitor()
-        # Ensure lb and ub are of the type (Array type accepts both)
+        
+        # Convert bounds to torch tensors if needed
         if lb is None:
             lb = -10 * torch.ones(self._problem.n_params)
         elif isinstance(lb, jax.Array):
@@ -102,6 +147,16 @@ class EvoxPSO(OptimizationAlgorithm):
 
         # Initiate algorithm with hyper params
         algorithm = PSO(pop_size=pop_size, lb=lb, ub=ub, **pso_kwargs)
+        
+        # If initial population is provided, set it before init_step
+        if init_params_pop is not None:
+            # Convert to torch if needed
+            if isinstance(init_params_pop, jax.Array):
+                init_pop_torch = j2t(init_params_pop)
+            else:
+                init_pop_torch = init_params_pop
+            # Only override the population - init_step will handle the rest
+            algorithm.pop = init_pop_torch
 
         # This results in the workflow
         workflow = StdWorkflow(
@@ -109,6 +164,9 @@ class EvoxPSO(OptimizationAlgorithm):
             problem=self._pso_problem,
             monitor=monitor,
         )
+        
+        # Initialize: evaluates population and sets initial best values
+        workflow.init_step()
 
         # Executing the algorithm itself
         best_params_history = []  # Shape: (n_generations, n_params)
