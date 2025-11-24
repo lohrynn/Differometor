@@ -6,16 +6,20 @@ import time
 from jaxtyping import Array, Float, jaxtyped
 from beartype import beartype as typechecker
 
-from optimization.protocols import ContinuousProblem, OptimizationAlgorithm, AlgorithmType
+from optimization.protocols import (
+    ContinuousProblem,
+    OptimizationAlgorithm,
+    AlgorithmType,
+)
 
 
 class AdamGD(OptimizationAlgorithm):
     """Adam Gradient Descent optimization algorithm.
-    
+
     Implements gradient-based optimization using the Adam optimizer from Optax.
     Includes gradient clipping and early stopping based on patience.
     """
-    
+
     algorithm_str: str = "adam"
     algorithm_type: AlgorithmType = AlgorithmType.GRADIENT_BASED
 
@@ -30,7 +34,7 @@ class AdamGD(OptimizationAlgorithm):
         Args:
             problem (ContinuousProblem): The continuous optimization problem to solve.
             max_iterations (int): Maximum number of optimization iterations. Defaults to 50,000.
-            patience (int): Stop if no improvement (>1e-4) after this many iterations. 
+            patience (int): Stop if no improvement (>1e-4) after this many iterations.
                 Only applies when wall_time is not set. Defaults to 1,000.
         """
         self._problem = problem
@@ -46,48 +50,50 @@ class AdamGD(OptimizationAlgorithm):
         init_params: Float[Array, "{self._problem.n_params}"] | None = None,
         return_best_params_history: bool = False,
         random_seed: int | None = None,
-        wall_time: float | None = None,
+        wall_time: int | float | None = None,
         learning_rate: float = 0.1,
-        **adam_kwargs
+        **adam_kwargs,
     ) -> tuple[
         Float[Array, "{self._problem.n_params}"],
         Float[Array, "n_iters {self._problem.n_params}"] | None,
-        Float[Array, "n_iters"]
+        Float[Array, "n_iters"],
     ]:
         """Run Adam gradient descent optimization.ptimization.
 
         Args:
             save_to_file (bool): Whether to save optimization results to file. Defaults to True.
-            init_params (Float[Array, "n_params"] | None): Initial parameters. If None, 
+            init_params (Float[Array, "n_params"] | None): Initial parameters. If None,
                 randomly initialized in range [-10, 10]. Defaults to None.
-            return_best_params_history (bool): Whether to track best parameters at each 
+            return_best_params_history (bool): Whether to track best parameters at each
                 iteration. Defaults to False.
-            random_seed (int | None): Random seed for reproducibility. Controls initial 
+            random_seed (int | None): Random seed for reproducibility. Controls initial
                 parameter generation when init_params is None. Defaults to None.
-            wall_time (float | None): Maximum wall-clock time in seconds. If None, runs for 
+            wall_time (int | float | None): Maximum wall-clock time in seconds. If None, runs for
                 max_iterations or until patience is exceeded. Defaults to None.
             learning_rate (float): Learning rate for Adam optimizer. Defaults to 0.1.
             **adam_kwargs: Additional keyword arguments passed to optax.adam().
-                Common options: b1 (float, default 0.9), b2 (float, default 0.999), 
-                eps (float, default 1e-8), eps_root (float, default 0.0), 
+                Common options: b1 (float, default 0.9), b2 (float, default 0.999),
+                eps (float, default 1e-8), eps_root (float, default 0.0),
                 nesterov (bool, default False).
 
         Returns:
             tuple: A 3-tuple containing:
                 - best_params (Float[Array, "n_params"]): Best parameters found.
-                - best_params_history (Float[Array, "n_iters n_params"] | None): History of 
+                - best_params_history (Float[Array, "n_iters n_params"] | None): History of
                   best parameters per iteration. None if return_best_params_history=False.
                 - losses (Float[Array, "n_iters"]): Loss at each iteration.
         """
         # Set random seed if provided (affects initial parameter generation)
         if random_seed is not None:
             np.random.seed(random_seed)
-        
+
         # Initialize parameters
-        best_params: Float[Array, "{self._problem.n_params}"] = jnp.array(
-            np.random.uniform(-10, 10, self._problem.n_params)
-        ) if init_params is None else init_params
-        
+        best_params: Float[Array, "{self._problem.n_params}"] = (
+            jnp.array(np.random.uniform(-10, 10, self._problem.n_params))
+            if init_params is None
+            else init_params
+        )
+
         # warmup the function to compile it
         _ = self._grad_fn(best_params)
 
@@ -118,7 +124,9 @@ class AdamGD(OptimizationAlgorithm):
                 if return_best_params_history:
                     best_params_history.append(best_params)
 
-                updates, optimizer_state = optimizer.update(grads, optimizer_state, params)
+                updates, optimizer_state = optimizer.update(
+                    grads, optimizer_state, params
+                )
                 params = optax.apply_updates(params, updates)
                 losses.append(float(loss))
                 i += 1
@@ -140,7 +148,9 @@ class AdamGD(OptimizationAlgorithm):
                 if return_best_params_history:
                     best_params_history.append(best_params)
 
-                updates, optimizer_state = optimizer.update(grads, optimizer_state, params)
+                updates, optimizer_state = optimizer.update(
+                    grads, optimizer_state, params
+                )
                 params = optax.apply_updates(params, updates)
                 losses.append(float(loss))
 
@@ -148,7 +158,9 @@ class AdamGD(OptimizationAlgorithm):
                     break
 
         losses = jnp.array(losses)
-        best_params_history = jnp.array(best_params_history) if return_best_params_history else None
+        best_params_history = (
+            jnp.array(best_params_history) if return_best_params_history else None
+        )
 
         if save_to_file:
             self._problem.output_to_files(

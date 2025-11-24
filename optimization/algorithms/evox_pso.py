@@ -23,11 +23,11 @@ from optimization import (
 
 class EvoxPSO(OptimizationAlgorithm):
     """EvoX-based Particle Swarm Optimization algorithm.
-    
+
     Implements PSO using the EvoX library with JAX backend. Handles batched
     evaluation of particles to manage memory efficiently.
     """
-    
+
     algorithm_str: str = "evox_pso"
     algorithm_type: AlgorithmType = AlgorithmType.EVOLUTIONARY
 
@@ -80,10 +80,11 @@ class EvoxPSO(OptimizationAlgorithm):
     def optimize(
         self,
         save_to_file: bool = True,
-        init_params_pop: Float[Array, "{pop_size} {self._problem.n_params}"] | None = None,
+        init_params_pop: Float[Array, "{pop_size} {self._problem.n_params}"]
+        | None = None,
         return_best_params_history: bool = False,
         random_seed: int | None = None,
-        wall_time: float | None = None,
+        wall_time: int | float | None = None,
         pop_size: int = 100,
         n_generations: int | None = None,
         lb: Float[Array, "{self._problem.n_params}"] | None = None,
@@ -93,48 +94,48 @@ class EvoxPSO(OptimizationAlgorithm):
         Float[Array, "{self._problem.n_params}"],
         Float[Array, "n_gens {self._problem.n_params}"],
         Float[Array, "n_gens"],
-        Float[Array, "n_gens {pop_size}"]
+        Float[Array, "n_gens {pop_size}"],
     ]:
         """Run PSO optimization.
 
         Args:
             save_to_file (bool): Whether to save optimization results to file. Defaults to True.
-            init_params_pop (Float[Array, "pop_size n_params"] | None): Initial population of 
+            init_params_pop (Float[Array, "pop_size n_params"] | None): Initial population of
                 parameters. If None, randomly initialized within bounds. Defaults to None.
-            return_best_params_history (bool): Whether to track best parameters at each 
+            return_best_params_history (bool): Whether to track best parameters at each
                 generation. Defaults to False.
-            random_seed (int | None): Random seed for reproducibility. Controls both initial 
+            random_seed (int | None): Random seed for reproducibility. Controls both initial
                 population generation and random coefficients during optimization. Defaults to None.
-            wall_time (float | None): Maximum wall-clock time in seconds. If None, runs for 
+            wall_time (int | float | None): Maximum wall-clock time in seconds. If None, runs for
                 n_generations. Defaults to None.
             pop_size (int): Number of particles in the swarm. Defaults to 100.
-            n_generations (int | None): Number of generations to run. Required if wall_time 
+            n_generations (int | None): Number of generations to run. Required if wall_time
                 is None. Defaults to None.
-            lb (Float[Array, "n_params"] | None): Lower bounds for each parameter. If None, 
+            lb (Float[Array, "n_params"] | None): Lower bounds for each parameter. If None,
                 uses -10 for all parameters. Defaults to None.
-            ub (Float[Array, "n_params"] | None): Upper bounds for each parameter. If None, 
+            ub (Float[Array, "n_params"] | None): Upper bounds for each parameter. If None,
                 uses 10 for all parameters. Defaults to None.
             **pso_kwargs: Additional keyword arguments passed to EvoX PSO constructor.
-                Common options: w (float, inertia weight, default 0.6), phi_p (float, 
-                cognitive coefficient, default 2.5), phi_g (float, social coefficient, 
+                Common options: w (float, inertia weight, default 0.6), phi_p (float,
+                cognitive coefficient, default 2.5), phi_g (float, social coefficient,
                 default 0.8).
 
         Returns:
             tuple: A 4-tuple containing:
                 - best_params (Float[Array, "n_params"]): Best parameters found.
-                - best_params_history (Float[Array, "n_gens n_params"]): History of best 
+                - best_params_history (Float[Array, "n_gens n_params"]): History of best
                   parameters per generation. Empty array if return_best_params_history=False.
                 - losses (Float[Array, "n_gens"]): Best loss at each generation.
-                - population_losses (Float[Array, "n_gens pop_size"]): Loss for each particle 
+                - population_losses (Float[Array, "n_gens pop_size"]): Loss for each particle
                   at each generation.
         """
         # Set random seed if provided (affects both initialization and step randomness)
         if random_seed is not None:
             torch.manual_seed(random_seed)
-        
+
         # Initiate monitor for loss tracking etc.
         monitor = EvalMonitor()
-        
+
         # Convert bounds to torch tensors if needed
         if lb is None:
             lb = -10 * torch.ones(self._problem.n_params)
@@ -147,7 +148,7 @@ class EvoxPSO(OptimizationAlgorithm):
 
         # Initiate algorithm with hyper params
         algorithm = PSO(pop_size=pop_size, lb=lb, ub=ub, **pso_kwargs)
-        
+
         # If initial population is provided, set it before init_step
         if init_params_pop is not None:
             # Convert to torch if needed
@@ -164,12 +165,17 @@ class EvoxPSO(OptimizationAlgorithm):
             problem=self._pso_problem,
             monitor=monitor,
         )
-        
+
         # Initialize: evaluates population and sets initial best values
         workflow.init_step()
 
         # Executing the algorithm itself
-        best_params_history = []  # Shape: (n_generations, n_params)
+        best_params_history = []  # Shape: (n_steps, n_params)
+
+        # Capture initial best params after init_step
+        if return_best_params_history:
+            best_params = t2j(monitor.topk_solutions)[0]
+            best_params_history.append(best_params)
 
         # If there is no time limit:
         if wall_time is None:

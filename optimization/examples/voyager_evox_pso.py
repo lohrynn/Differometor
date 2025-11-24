@@ -24,7 +24,7 @@ def main():
     # Initialize optimizer with batch_size to control memory usage
     # Start with batch_size=5, increase if you have memory to spare
     optimizer = EvoxPSO(problem=vp, batch_size=args.batch_size)
-    
+
     optimizer.optimize(
         pop_size=args.pop_size,
         n_generations=args.n_generations,

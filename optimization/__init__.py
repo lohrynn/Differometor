@@ -9,6 +9,7 @@ from optimization.protocols import (
     OptimizationAlgorithm,
     AlgorithmType,
 )
+
 # Import utilities
 from optimization.config import create_parser
 from optimization.utils import t2j, j2t, t2j_numpy, j2t_numpy
