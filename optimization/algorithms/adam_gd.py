@@ -3,6 +3,7 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 import time
+from collections import deque
 from jaxtyping import Array, Float, jaxtyped
 from beartype import beartype as typechecker
 
@@ -35,7 +36,7 @@ class AdamGD(OptimizationAlgorithm):
             problem (ContinuousProblem): The continuous optimization problem to solve.
             max_iterations (int): Maximum number of optimization iterations. Defaults to 50,000.
             patience (int): Stop if no improvement (>1e-4) after this many iterations.
-                Only applies when wall_time is not set. Defaults to 1,000.
+                Only applies when wall_times is not set. Defaults to 1,000.
         """
         self._problem = problem
         self.max_iterations = max_iterations
@@ -50,15 +51,16 @@ class AdamGD(OptimizationAlgorithm):
         init_params: Float[Array, "{self._problem.n_params}"] | None = None,
         return_best_params_history: bool = False,
         random_seed: int | None = None,
-        wall_time: int | float | None = None,
+        wall_times: list[int | float] | None = None,
         learning_rate: float = 0.1,
         **adam_kwargs,
     ) -> tuple[
         Float[Array, "{self._problem.n_params}"],
         Float[Array, "n_iters {self._problem.n_params}"] | None,
         Float[Array, "n_iters"],
+        list[int] | None,
     ]:
-        """Run Adam gradient descent optimization.ptimization.
+        """Run Adam gradient descent optimization.
 
         Args:
             save_to_file (bool): Whether to save optimization results to file. Defaults to True.
@@ -68,8 +70,10 @@ class AdamGD(OptimizationAlgorithm):
                 iteration. Defaults to False.
             random_seed (int | None): Random seed for reproducibility. Controls initial
                 parameter generation when init_params is None. Defaults to None.
-            wall_time (int | float | None): Maximum wall-clock time in seconds. If None, runs for
-                max_iterations or until patience is exceeded. Defaults to None.
+            wall_times (list[int | float] | None): List of wall-time checkpoints (in seconds).
+                The algorithm runs until the maximum checkpoint. At each checkpoint,
+                the current iteration index is recorded. If None, runs for max_iterations or 
+                until patience is exceeded. Defaults to None.
             learning_rate (float): Learning rate for Adam optimizer. Defaults to 0.1.
             **adam_kwargs: Additional keyword arguments passed to optax.adam().
                 Common options: b1 (float, default 0.9), b2 (float, default 0.999),
@@ -77,11 +81,13 @@ class AdamGD(OptimizationAlgorithm):
                 nesterov (bool, default False).
 
         Returns:
-            tuple: A 3-tuple containing:
+            tuple: A 4-tuple containing:
                 - best_params (Float[Array, "n_params"]): Best parameters found.
                 - best_params_history (Float[Array, "n_iters n_params"] | None): History of
                   best parameters per iteration. None if return_best_params_history=False.
                 - losses (Float[Array, "n_iters"]): Loss at each iteration.
+                - wall_time_indices (list[int] | None): Iteration indices corresponding to
+                  each wall_times checkpoint (in sorted ascending order). None if wall_times is None.
         """
         # Set random seed if provided (affects initial parameter generation)
         if random_seed is not None:
@@ -105,13 +111,28 @@ class AdamGD(OptimizationAlgorithm):
         params, losses = best_params, []
         best_params_history = []  # later shape: (n_iterations, n_params)
         best_loss = 1e10
+        
+        # Initialize wall_time_indices tracking
+        wall_time_indices: list[int] | None = None
+        wall_times_remaining: deque[int | float] | None = None
+        if wall_times is not None:
+            wall_time_indices = []
+            wall_times_remaining = deque(sorted(wall_times))
+            max_wall_time = wall_times_remaining[-1]
 
         # Separate loops for wall-time constrained vs iteration/patience constrained
-        if wall_time is not None:
+        if wall_times is not None:
             # Wall-time constrained: ignore max_iterations and patience
             start_time = time.time()
             i = 0
-            while (time.time() - start_time) < wall_time:
+            while (time.time() - start_time) < max_wall_time:
+                elapsed = time.time() - start_time
+                
+                # Record iteration index at wall_times checkpoints
+                while wall_times_remaining and elapsed >= wall_times_remaining[0]:
+                    wall_time_indices.append(i)
+                    wall_times_remaining.popleft()
+                
                 loss, grads = self._grad_fn(params)
 
                 if i % 100 == 0:
@@ -130,6 +151,11 @@ class AdamGD(OptimizationAlgorithm):
                 params = optax.apply_updates(params, updates)
                 losses.append(float(loss))
                 i += 1
+            
+            # Fill remaining wall_times that weren't reached with final iteration
+            while wall_times_remaining:
+                wall_time_indices.append(i - 1 if i > 0 else 0)
+                wall_times_remaining.popleft()
         else:
             # Iteration/patience constrained
             no_improve_count = 0
@@ -170,4 +196,4 @@ class AdamGD(OptimizationAlgorithm):
                 hyper_param_str=f"lr{learning_rate}",
             )  # TODO maybe conditionally add more hyperparameters to string
 
-        return best_params, best_params_history, losses
+        return best_params, best_params_history, losses, wall_time_indices

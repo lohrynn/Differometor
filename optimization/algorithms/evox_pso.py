@@ -6,6 +6,7 @@ import jax
 import jax.numpy as jnp
 import torch
 import time
+from collections import deque
 from evox.algorithms import PSO
 from evox.core import Problem as EvoxProblem
 from evox.workflows import EvalMonitor, StdWorkflow
@@ -84,7 +85,7 @@ class EvoxPSO(OptimizationAlgorithm):
         | None = None,
         return_best_params_history: bool = False,
         random_seed: int | None = None,
-        wall_time: int | float | None = None,
+        wall_times: list[int | float] | None = None,
         pop_size: int = 100,
         n_generations: int | None = None,
         lb: Float[Array, "{self._problem.n_params}"] | None = None,
@@ -94,6 +95,7 @@ class EvoxPSO(OptimizationAlgorithm):
         Float[Array, "{self._problem.n_params}"],
         Float[Array, "n_gens {self._problem.n_params}"],
         Float[Array, "n_gens"],
+        list[int] | None,
         Float[Array, "n_gens {pop_size}"],
     ]:
         """Run PSO optimization.
@@ -106,11 +108,15 @@ class EvoxPSO(OptimizationAlgorithm):
                 generation. Defaults to False.
             random_seed (int | None): Random seed for reproducibility. Controls both initial
                 population generation and random coefficients during optimization. Defaults to None.
-            wall_time (int | float | None): Maximum wall-clock time in seconds. If None, runs for
-                n_generations. Defaults to None.
+            wall_times (list[int | float] | None): List of wall-time checkpoints (in seconds).
+                The algorithm runs until the maximum checkpoint. At each checkpoint,
+                the current generation index is recorded. Checkpoints are automatically
+                sorted ascending; returned indices follow this sorted order.
+                If None, runs for n_generations. Defaults to None.
             pop_size (int): Number of particles in the swarm. Defaults to 100.
-            n_generations (int | None): Number of generations to run. Required if wall_time
-                is None. Defaults to None.
+            n_generations (int | None): Number of generations to run. Required if wall_times
+                is None. Can be combined with wall_times as an additional stopping criterion.
+                Defaults to None.
             lb (Float[Array, "n_params"] | None): Lower bounds for each parameter. If None,
                 uses -10 for all parameters. Defaults to None.
             ub (Float[Array, "n_params"] | None): Upper bounds for each parameter. If None,
@@ -121,13 +127,15 @@ class EvoxPSO(OptimizationAlgorithm):
                 default 0.8).
 
         Returns:
-            tuple: A 4-tuple containing:
+            tuple: A 5-tuple containing:
                 - best_params (Float[Array, "n_params"]): Best parameters found.
                 - best_params_history (Float[Array, "n_gens n_params"]): History of best
                   parameters per generation. Empty array if return_best_params_history=False.
                 - losses (Float[Array, "n_gens"]): Best loss at each generation.
+                - wall_time_indices (list[int] | None): Generation indices corresponding to
+                  each wall_times checkpoint (in sorted ascending order). None if wall_times is None.
                 - population_losses (Float[Array, "n_gens pop_size"]): Loss for each particle
-                  at each generation.
+                  at each generation (PSO-specific).
         """
         # Set random seed if provided (affects both initialization and step randomness)
         if random_seed is not None:
@@ -177,8 +185,16 @@ class EvoxPSO(OptimizationAlgorithm):
             best_params = t2j(monitor.topk_solutions)[0]
             best_params_history.append(best_params)
 
+        # Initialize wall_time_indices tracking
+        wall_time_indices: list[int] | None = None
+        wall_times_remaining: deque[int | float] | None = None
+        if wall_times is not None:
+            wall_time_indices = []
+            wall_times_remaining = deque(sorted(wall_times))
+            max_wall_time = wall_times_remaining[-1]
+
         # If there is no time limit:
-        if wall_time is None:
+        if wall_times is None:
             for _ in range(n_generations):
                 workflow.step()
                 if return_best_params_history:
@@ -186,22 +202,48 @@ class EvoxPSO(OptimizationAlgorithm):
                     best_params_history.append(best_params)
         else:
             start_time = time.time()
+            gen = 0  # Generation counter (init_step counts as generation 0)
             # With both time limit and generation limit:
             if n_generations is not None:
-                for gen in range(n_generations):
-                    if (time.time() - start_time) >= wall_time:
+                for _ in range(n_generations):
+                    elapsed = time.time() - start_time
+                    
+                    # Record generation index at wall_times checkpoints
+                    while wall_times_remaining and elapsed >= wall_times_remaining[0]:
+                        wall_time_indices.append(gen)
+                        wall_times_remaining.popleft()
+                    
+                    if elapsed >= max_wall_time:
                         break
+                    
                     workflow.step()
+                    gen += 1
                     if return_best_params_history:
                         best_params = t2j(monitor.topk_solutions)[0]
                         best_params_history.append(best_params)
             # With only time limit:
             else:
-                while (time.time() - start_time) < wall_time:
+                while True:
+                    elapsed = time.time() - start_time
+                    
+                    # Record generation index at wall_times checkpoints
+                    while wall_times_remaining and elapsed >= wall_times_remaining[0]:
+                        wall_time_indices.append(gen)
+                        wall_times_remaining.popleft()
+                    
+                    if elapsed >= max_wall_time:
+                        break
+                    
                     workflow.step()
+                    gen += 1
                     if return_best_params_history:
                         best_params = t2j(monitor.topk_solutions)[0]
                         best_params_history.append(best_params)
+            
+            # Fill remaining wall_times that weren't reached with final generation
+            while wall_times_remaining:
+                wall_time_indices.append(gen)
+                wall_times_remaining.popleft()
 
         # Extract results from monitor
         best_params = t2j(monitor.topk_solutions)[0]
@@ -224,4 +266,4 @@ class EvoxPSO(OptimizationAlgorithm):
                 hyper_param_str=hyper_param_str,
             )
 
-        return best_params, best_params_history, losses, population_losses
+        return best_params, best_params_history, losses, wall_time_indices, population_losses
