@@ -41,6 +41,186 @@ class AggregateMetric:
     std: Float[Array, "n_time_steps"]
 
 
+# =============================================================================
+#                             Helper functions
+# =============================================================================
+# Architecture:
+#   _run_*   : Per-run computations (operate on single 1D loss/param array)
+#   _agg_*   : Aggregation across runs (combine per-run values into metrics)
+#   _multi_* : Multi-run computations (inherently need all runs, e.g., diversity)
+#
+# The evaluation loop:
+#   1. For each time step, get per-run indices from wall_time_indices
+#   2. Compute per-run values using _run_* functions in list comprehensions
+#   3. Aggregate into benchmark metrics using _agg_* functions
+#   4. For special metrics (diversity, top-k), use _multi_* functions
+#
+# DESIGN NOTE: Alternative Vectorized Masking Approach
+# ----------------------------------------------------
+# We considered padding all runs to max_iterations and using boolean masks:
+#   mask = iter_range[None, :] < wall_time_indices[:, t, None]
+#   masked_losses = jnp.where(mask, all_losses, jnp.inf)
+#
+# Performance Analysis:
+# - Both approaches are essentially equivalent for our use case
+# - The Python loop is over runs (~100), not iterations (~100k)
+# - Heavy compute (reductions) is already vectorized JAX in both approaches
+#
+# We chose list iteration because:
+# - Simpler to reason about, fewer edge cases with neutral values
+# - No memory overhead from padding (important if iteration counts vary widely)
+# - Code clarity: explicit per-run logic is easier to debug
+#
+# The matrix approach would be preferred if:
+# - Evaluation needs to be JIT-compiled (e.g., inside an optimization loop)
+# - Running on GPU where kernel launch overhead dominates
+# =============================================================================
+
+
+# =============================================================================
+# PER-RUN FUNCTIONS (_run_*)
+# =============================================================================
+# These compute values for a single run's data (1D array of losses/params).
+# Used in list comprehensions to process each run independently.
+# =============================================================================
+
+
+def _run_min_loss(losses: Float[Array, "iterations"]) -> float:
+    """Minimum loss achieved in a single run."""
+    return float(jnp.min(losses))
+
+
+def _run_has_success(losses: Float[Array, "iterations"], threshold: float) -> bool:
+    """Whether a single run achieved success (any loss below threshold)."""
+    return bool(jnp.any(losses < threshold))
+
+
+def _run_first_success_iter(
+    losses: Float[Array, "iterations"], threshold: float
+) -> int | None:
+    """Iteration index of first success, or None if no success."""
+    mask = losses < threshold
+    if jnp.any(mask):
+        return int(jnp.argmax(mask))
+    return None
+
+
+def _run_auc(losses: Float[Array, "iterations"], dx: float) -> float:
+    """Area under the loss curve for a single run."""
+    return float(jnp.trapezoid(losses, dx=dx))
+
+
+# =============================================================================
+# AGGREGATION FUNCTIONS (_agg_*)
+# =============================================================================
+# These combine per-run results into benchmark metrics (the actual numbers
+# that characterize algorithm performance across many runs).
+# =============================================================================
+
+
+def _agg_mean_std(values: list[float]) -> tuple[float, float]:
+    """Compute mean and std from a list of per-run values."""
+    arr = jnp.array(values)
+    return float(jnp.mean(arr)), float(jnp.std(arr))
+
+
+def _agg_min(values: list[float]) -> float:
+    """Global minimum across all runs."""
+    return float(min(values))
+
+
+def _agg_fraction_true(values: list[bool]) -> float:
+    """Fraction of True values (e.g., fraction of successful runs)."""
+    return sum(values) / len(values) if values else 0.0
+
+
+def _agg_mean_std_filtered(
+    values: list[float | None], fallback: float
+) -> tuple[float, float]:
+    """Mean and std of non-None values. Returns (fallback, 0.0) if all None."""
+    filtered = [v for v in values if v is not None]
+    if filtered:
+        arr = jnp.array(filtered)
+        return float(jnp.mean(arr)), float(jnp.std(arr))
+    return fallback, 0.0
+
+
+# =============================================================================
+# MULTI-RUN FUNCTIONS
+# =============================================================================
+# These inherently need data from all runs (e.g., diversity, top-k selection).
+# They operate on collections of solutions, not individual runs.
+# =============================================================================
+
+
+def _multi_solution_diversity_overall(
+    params: Float[Array, "n_solutions n_params"],
+) -> tuple[float, float]:
+    """Overall diversity as mean pairwise Euclidean distance (mean ± std).
+    
+    Returns (0.0, 0.0) if fewer than 2 solutions.
+    """
+    n_solutions = params.shape[0]
+    if n_solutions < 2:
+        return 0.0, 0.0
+    
+    diff = params[:, None, :] - params[None, :, :]
+    distances = jnp.linalg.norm(diff, axis=2)
+    
+    mask = ~jnp.eye(n_solutions, dtype=bool)
+    pairwise_distances = distances[mask]
+    
+    return float(jnp.mean(pairwise_distances)), float(jnp.std(pairwise_distances))
+
+
+def _multi_solution_diversity_nn(
+    params: Float[Array, "n_solutions n_params"],
+) -> tuple[float, float]:
+    """Nearest-neighbor diversity (mean ± std of distances to nearest neighbor).
+    
+    Returns (0.0, 0.0) if fewer than 2 solutions.
+    """
+    n_solutions = params.shape[0]
+    if n_solutions < 2:
+        return 0.0, 0.0
+    
+    diff = params[:, None, :] - params[None, :, :]
+    distances = jnp.linalg.norm(diff, axis=2)
+    
+    distances_no_diag = jnp.where(
+        jnp.eye(n_solutions, dtype=bool), jnp.inf, distances
+    )
+    nearest_neighbor_distances = jnp.min(distances_no_diag, axis=1)
+    
+    return float(jnp.mean(nearest_neighbor_distances)), float(jnp.std(nearest_neighbor_distances))
+
+
+def _multi_auc_top_k(
+    run_min_losses: list[float],
+    run_aucs: list[float],
+    k_fraction: float = 0.1,
+) -> tuple[float, float]:
+    """AUC statistics for top k% of runs (by final min loss).
+    
+    Args:
+        run_min_losses: Min loss achieved by each run
+        run_aucs: AUC for each run
+        k_fraction: Fraction of runs to consider as "top" (default 10%)
+    
+    Returns:
+        (mean, std) of AUC for top k% runs
+    """
+    n_runs = len(run_min_losses)
+    n_top = max(1, int(n_runs * k_fraction))
+    
+    # Sort by min loss, get top indices
+    sorted_indices = sorted(range(n_runs), key=lambda i: run_min_losses[i])
+    top_indices = sorted_indices[:n_top]
+    
+    top_aucs = [run_aucs[i] for i in top_indices]
+    return _agg_mean_std(top_aucs)
+
+
 @dataclass
 class BenchmarkResult:
     """Results from a benchmark run using one algorithm across multiple time steps.
@@ -75,21 +255,61 @@ class BenchmarkResult:
 class AlgorithmConfig:
     """Configuration for an algorithm to benchmark."""
 
+    # Common hyperparameter names that indicate calls per iteration
+    _CALLS_PER_ITER_KEYS = ["pop_size", "population_size", "n_particles"]
+
     def __init__(
         self,
         algorithm: OptimizationAlgorithm,
         hyperparameters: Dict[str, Any],
         name: Optional[str] = None,
+        calls_per_iteration: Optional[int] = None,
     ):
         """
         Args:
             algorithm: The algorithm instance to benchmark
             hyperparameters: Dictionary of hyperparameters to pass to optimize()
             name: Optional custom name for this configuration
+            calls_per_iteration: Number of objective function calls per iteration.
+                If None, auto-detected from hyperparameters (e.g., pop_size) or
+                inferred from algorithm type. Explicit value takes precedence.
         """
         self.algorithm = algorithm
         self.hyperparameters = hyperparameters
         self.name = name or algorithm.algorithm_str
+        self._calls_per_iteration = calls_per_iteration or self._infer_calls_per_iteration()
+
+    def _infer_calls_per_iteration(self) -> int:
+        """Infer calls per iteration from hyperparameters or algorithm type.
+
+        Priority:
+        1. Check common hyperparameter names (pop_size, population_size, etc.)
+        2. Fall back to algorithm type (evolutionary -> 100, gradient -> 1)
+        3. Default to 1 if unknown
+
+        Returns:
+            Inferred number of objective function calls per iteration
+        """
+        # Check common hyperparameter names
+        for key in self._CALLS_PER_ITER_KEYS:
+            if key in self.hyperparameters:
+                return self.hyperparameters[key]
+
+        # Fall back to algorithm type
+        try:
+            if self.algorithm.algorithm_type == AlgorithmType.EVOLUTIONARY:
+                return 100  # Common default population size
+            elif self.algorithm.algorithm_type == AlgorithmType.GRADIENT_BASED:
+                return 1
+        except AttributeError:
+            pass  # Algorithm doesn't have algorithm_type
+
+        return 1  # Default: 1 call per iteration
+
+    @property
+    def calls_per_iteration(self) -> int:
+        """Number of objective function calls per iteration."""
+        return self._calls_per_iteration
 
 
 class Benchmark:
@@ -121,57 +341,9 @@ class Benchmark:
         self._success_loss = success_loss
         self._configs = configs
         self._n_runs = n_runs
-        self._wall_time_steps = wall_time_steps
+        self._wall_time_steps = sorted(wall_time_steps)
         # Warmup jit compilation
         _ = problem.objective_function(jnp.zeros(problem.n_params))
-
-    # def _ensure_max_calls(self, config: AlgorithmConfig):
-    #     match config.algorithm.algorithm_type:  # Maybe print a warning if overwritten?
-    #         case AlgorithmType.GRADIENT_BASED:
-    #             config.hyperparameters["max_iterations"] = self.max_calls # Each iteration is one call (i suppose)
-    #         case AlgorithmType.EVOLUTIONARY:
-    #             config.hyperparameters["n_generations"] = self.max_calls // config.hyperparameters.get("pop_size", 100)  # 100 is the default pop_size
-    #     return config
-
-    def _pad_to_max_length(self, arrays: list) -> jnp.ndarray:
-        """Pad arrays to maximum length using final values.
-
-        Handles arrays of any dimensionality by extending the first axis (iterations).
-        Pads shorter sequences with their final value(s) to ensure all runs have
-        the same number of iterations for vectorized processing.
-
-        Args:
-            arrays: List of JAX arrays with potentially different lengths along axis 0
-
-        Returns:
-            Stacked array with shape (n_runs, max_length, ...) where shorter
-            runs are padded with their final values along the first axis
-        """
-        if not arrays:
-            return jnp.array([])
-
-        # Determine maximum length across all arrays
-        max_len = max(len(arr) for arr in arrays)
-        min_len = min(len(arr) for arr in arrays)
-
-        # Warn if significant variation in iteration counts
-        if max_len > 0 and (max_len - min_len) / min_len > 0.1:
-            print(
-                f"Warning: Iteration count varies by {(max_len - min_len) / min_len:.1%} ({min_len}-{max_len} iterations)"
-            )
-
-        padded = []
-        for arr in arrays:
-            if len(arr) < max_len:
-                n_pad = max_len - len(arr)
-                # Pad only the first axis (iterations): (0, n_pad)
-                # Don't pad other axes: (0, 0) for each remaining dimension
-                pad_width = ((0, n_pad),) + ((0, 0),) * (arr.ndim - 1)
-                arr = jnp.pad(arr, pad_width, mode="edge")
-
-            padded.append(arr)
-
-        return jnp.array(padded)
 
     def _run_algorithm(self, config: AlgorithmConfig) -> BenchmarkResult:
         """Run a single algorithm configuration multiple times and evaluate results.
@@ -185,29 +357,32 @@ class Benchmark:
         print(f"\n{'=' * 70}")
         print(f"Running: {config.name}")
         print(f"Hyperparameters: {config.hyperparameters}")
+        print(f"Calls per iteration: {config.calls_per_iteration}")
         print(f"Number of runs: {self._n_runs}")
         print(f"Wall time limit: {self._wall_time_steps[-1]:.1f}s")
         print(f"{'=' * 70}\n")
 
         all_best_params = []
-        all_best_params_history = []
-        all_losses = []
+        all_best_params_history = []  # list of arrays (variable length)
+        all_losses = []  # list of arrays (variable length)
+        all_wall_time_indices = []  # list of lists (indices per timestep)
 
         for i_run in range(self._n_runs):
             print(f"Run {i_run + 1}/{self._n_runs}...", end=" ", flush=True)
 
-            # Run optimization
-            best_params, best_params_history, losses, *_ = config.algorithm.optimize(
+            # Run optimization with wall_times to get exact indices
+            best_params, best_params_history, losses, wall_time_indices, *_ = config.algorithm.optimize(
                 save_to_file=False,
                 return_best_params_history=True,
-                wall_time=self._wall_time_steps[-1],
+                wall_times=self._wall_time_steps,
                 **config.hyperparameters,
             )
 
-            # Store results
+            # Store results (keep as lists, no padding)
             all_best_params.append(best_params)
             all_best_params_history.append(best_params_history)
             all_losses.append(losses)
+            all_wall_time_indices.append(wall_time_indices)
 
             # Print progress
             final_loss = losses[-1] if len(losses) > 0 else float("inf")
@@ -215,254 +390,179 @@ class Benchmark:
 
         print(f"\nCompleted {self._n_runs} runs for {config.name}")
 
-        # Pad arrays to handle variable iteration counts due to wall time limits
-        all_best_params = jnp.array(all_best_params)  # Should already be same shape
-        all_best_params_history = self._pad_to_max_length(all_best_params_history)
-        all_losses = self._pad_to_max_length(all_losses)
+        # Convert best_params to array (these should all be same shape)
+        all_best_params = jnp.array(all_best_params)
 
-        # Evaluate results
+        # Evaluate results using list-based approach
         return self._evaluate_runs(
             config,
             all_best_params,
             all_best_params_history,
             all_losses,
+            all_wall_time_indices,
         )
 
     def _evaluate_runs(
         self,
         config: AlgorithmConfig,
         all_best_params: Float[Array, "runs params"],
-        all_best_params_history: Float[Array, "runs iterations params"],
-        all_losses: Float[Array, "runs iterations"],
+        all_best_params_history: list[Float[Array, "iterations params"]],
+        all_losses: list[Float[Array, "iterations"]],
+        all_wall_time_indices: list[list[int]],
     ) -> BenchmarkResult:
-        """Evaluate an algorithm's runs' results using vectorized operations.
+        """Evaluate an algorithm's runs using per-run functions and aggregation.
 
         Args:
             config: Algorithm configuration
             all_best_params: Best parameters found during each run
-            all_best_params_history: History of best parameters at each iteration for each run
-            all_losses: Losses recorded during each run at each iteration
+            all_best_params_history: History of best params per iteration (list of arrays)
+            all_losses: Losses per iteration for each run (list of arrays)
+            all_wall_time_indices: Per-run indices for each wall_time checkpoint
 
         Returns:
             BenchmarkResult containing all metrics as arrays
         """
         print("Evaluating runs...")
-        print("Shapes:")
-        print("all_best_params:", all_best_params.shape)
-        print("all_best_params_history:", all_best_params_history.shape)
-        print("all_losses:", all_losses.shape)
-
-        n_runs, n_iterations = all_losses.shape
+        n_runs = len(all_losses)
         n_time_steps = len(self._wall_time_steps)
-        total_time = self._wall_time_steps[-1]
-        time_per_iteration = total_time / n_iterations
 
-        # Pre-allocate arrays for all metrics
-        # Single-value metrics
-        fraction_of_success_arr = jnp.zeros(n_time_steps)
-        min_loss_arr = jnp.zeros(n_time_steps)
-        auc_top_1_arr = jnp.zeros(n_time_steps)
+        # Result containers (lists, converted to arrays at the end)
+        fraction_of_success_list = []
+        min_loss_list = []
+        avg_loss_list = []  # list of (mean, std) tuples
+        time_to_success_list = []
+        calls_to_success_list = []
+        time_per_call_list = []
+        auc_top_1_list = []
+        auc_top_10_list = []
+        diversity_overall_list = []
+        diversity_nn_list = []
 
-        # Aggregate metrics (mean + std)
-        avg_loss_mean = jnp.zeros(n_time_steps)
-        avg_loss_std = jnp.zeros(n_time_steps)
-        time_to_success_mean = jnp.zeros(n_time_steps)
-        time_to_success_std = jnp.zeros(n_time_steps)
-        calls_to_success_mean = jnp.zeros(n_time_steps)
-        calls_to_success_std = jnp.zeros(n_time_steps)
-        solution_diversity_overall_mean = jnp.zeros(n_time_steps)
-        solution_diversity_overall_std = jnp.zeros(n_time_steps)
-        solution_diversity_nn_mean = jnp.zeros(n_time_steps)
-        solution_diversity_nn_std = jnp.zeros(n_time_steps)
-        time_per_call_mean = jnp.zeros(n_time_steps)
-        time_per_call_std = jnp.zeros(n_time_steps)
-        auc_top_10_mean = jnp.zeros(n_time_steps)
-        auc_top_10_std = jnp.zeros(n_time_steps)
+        # Get calls_per_iteration from config
+        calls_per_iter = config.calls_per_iteration
 
         for i_time, wall_time in enumerate(self._wall_time_steps):
-            # Get iteration index for this wall time
-            max_iter = int(wall_time / time_per_iteration)
-            max_iter = min(max_iter, n_iterations)
+            # Get per-run iteration indices for this time step
+            indices = [wti[i_time] for wti in all_wall_time_indices]
+            
+            # Compute time_per_iteration based on this timestep
+            # Use average iterations across runs for this time step
+            avg_iters = sum(indices) / len(indices) if indices else 1
+            time_per_iter = wall_time / avg_iters if avg_iters > 0 else 0.0
+            
+            # Time per objective function call (accounting for population/batch size)
+            time_per_call = time_per_iter / calls_per_iter if calls_per_iter > 0 else 0.0
 
-            # Slice losses up to this point
-            losses_up_to_time = all_losses[:, :max_iter]  # Shape: (n_runs, max_iter)
+            # === Per-run computations via list comprehensions ===
+            run_min_losses = [
+                _run_min_loss(losses[:idx])
+                for losses, idx in zip(all_losses, indices)
+            ]
+            run_has_success = [
+                _run_has_success(losses[:idx], self._success_loss)
+                for losses, idx in zip(all_losses, indices)
+            ]
+            run_first_success_iters = [
+                _run_first_success_iter(losses[:idx], self._success_loss)
+                for losses, idx in zip(all_losses, indices)
+            ]
+            run_aucs = [
+                _run_auc(losses[:idx], dx=time_per_iter)
+                for losses, idx in zip(all_losses, indices)
+            ]
 
-            # FRACTION OF SUCCESS
-            success_mask = (
-                losses_up_to_time < self._success_loss
-            )  # Shape: (n_runs, max_iter)
-            has_success = jnp.any(success_mask, axis=1)  # Shape: (n_runs,)
-            n_successes = jnp.sum(has_success)
-            fraction_of_success_arr = fraction_of_success_arr.at[i_time].set(
-                n_successes / n_runs
-            )
-
-            # TIME TO SUCCESS & CALLS TO SUCCESS (vectorized!)
-            first_success_iter = jnp.argmax(success_mask, axis=1)  # Shape: (n_runs,)
-            first_success_iter = jnp.where(has_success, first_success_iter, max_iter)
-
-            # Calculate mean and std only for successful runs
-            if n_successes > 0:
-                successful_iters_only = first_success_iter[has_success]
-                time_to_success_mean = time_to_success_mean.at[i_time].set(
-                    jnp.mean(successful_iters_only) * time_per_iteration
-                )
-                time_to_success_std = time_to_success_std.at[i_time].set(
-                    jnp.std(successful_iters_only) * time_per_iteration
-                )
-                calls_to_success_mean = calls_to_success_mean.at[i_time].set(
-                    jnp.mean(successful_iters_only)
-                )
-                calls_to_success_std = calls_to_success_std.at[i_time].set(
-                    jnp.std(successful_iters_only)
-                )
+            # === Aggregate into benchmark metrics ===
+            
+            # Fraction of success
+            fraction_of_success_list.append(_agg_fraction_true(run_has_success))
+            
+            # Min loss (global minimum across all runs)
+            min_loss_list.append(_agg_min(run_min_losses))
+            
+            # Average loss (mean ± std of per-run minimums)
+            avg_loss_list.append(_agg_mean_std(run_min_losses))
+            
+            # Time to success (only successful runs)
+            success_times = [
+                iter_idx * time_per_iter
+                for iter_idx in run_first_success_iters
+                if iter_idx is not None
+            ]
+            if success_times:
+                time_to_success_list.append(_agg_mean_std(success_times))
             else:
-                # No successful runs
-                time_to_success_mean = time_to_success_mean.at[i_time].set(
-                    float(max_iter * time_per_iteration)
-                )
-                time_to_success_std = time_to_success_std.at[i_time].set(0.0)
-                calls_to_success_mean = calls_to_success_mean.at[i_time].set(
-                    float(max_iter)
-                )
-                calls_to_success_std = calls_to_success_std.at[i_time].set(0.0)
-
-            # MIN/AVG LOSS
-            run_min_losses = jnp.min(losses_up_to_time, axis=1)  # Shape: (n_runs,)
-            min_loss_arr = min_loss_arr.at[i_time].set(jnp.min(run_min_losses))
-            avg_loss_mean = avg_loss_mean.at[i_time].set(jnp.mean(run_min_losses))
-            avg_loss_std = avg_loss_std.at[i_time].set(jnp.std(run_min_losses))
-
-            # TIME PER CALL (same for all runs at this time step, so std=0)
-            time_per_call_mean = time_per_call_mean.at[i_time].set(
-                time_per_iteration * 1000
-            )  # in ms
-            time_per_call_std = time_per_call_std.at[i_time].set(0.0)
-
-            # AUC TOP 1: Area under curve for the single best run
-            best_run_idx = jnp.argmin(run_min_losses)  # Find best run
-            best_run_losses = losses_up_to_time[best_run_idx]  # Shape: (max_iter,)
-            auc_top_1_arr = auc_top_1_arr.at[i_time].set(
-                jnp.trapezoid(best_run_losses, dx=time_per_iteration)
-            )
-
-            # AUC TOP 10: Area under curve for top 10% runs (mean ± std)
-            n_top = max(1, n_runs // 10)  # At least 1 run
-            top_run_indices = jnp.argsort(run_min_losses)[
-                :n_top
-            ]  # Indices of best runs
-            top_runs_losses = losses_up_to_time[
-                top_run_indices
-            ]  # Shape: (n_top, max_iter)
-
-            # Compute AUC for each top run
-            top_aucs = jnp.array(
-                [
-                    jnp.trapezoid(top_runs_losses[i], dx=time_per_iteration)
-                    for i in range(n_top)
-                ]
-            )
-            auc_top_10_mean = auc_top_10_mean.at[i_time].set(jnp.mean(top_aucs))
-            auc_top_10_std = auc_top_10_std.at[i_time].set(jnp.std(top_aucs))
-
-            # SOLUTION DIVERSITY
-            # Get best parameters at max_iter for all successful runs
-            params_at_max_iter = all_best_params_history[
-                :, max_iter - 1, :
-            ]  # Shape: (n_runs, n_params)
-            successful_params = params_at_max_iter[
-                has_success
-            ]  # Shape: (n_successful, n_params)
-
-            # Calculate diversity only if we have at least 2 successful solutions
-            if n_successes > 1:
-                diversity_overall_vals, diversity_nn_vals = (
-                    self._calculate_diversity_with_std(successful_params, n_successes)
-                )
-                solution_diversity_overall_mean = solution_diversity_overall_mean.at[
-                    i_time
-                ].set(diversity_overall_vals[0])
-                solution_diversity_overall_std = solution_diversity_overall_std.at[
-                    i_time
-                ].set(diversity_overall_vals[1])
-                solution_diversity_nn_mean = solution_diversity_nn_mean.at[i_time].set(
-                    diversity_nn_vals[0]
-                )
-                solution_diversity_nn_std = solution_diversity_nn_std.at[i_time].set(
-                    diversity_nn_vals[1]
-                )
+                # No successes: use NaN to indicate "not applicable"
+                time_to_success_list.append((float("nan"), float("nan")))
+            
+            # Calls to success (only successful runs) - multiply iterations by calls_per_iter
+            success_calls = [
+                i * calls_per_iter for i in run_first_success_iters if i is not None
+            ]
+            if success_calls:
+                calls_to_success_list.append(_agg_mean_std([float(c) for c in success_calls]))
             else:
-                solution_diversity_overall_mean = solution_diversity_overall_mean.at[
-                    i_time
-                ].set(0.0)
-                solution_diversity_overall_std = solution_diversity_overall_std.at[
-                    i_time
-                ].set(0.0)
-                solution_diversity_nn_mean = solution_diversity_nn_mean.at[i_time].set(
-                    0.0
-                )
-                solution_diversity_nn_std = solution_diversity_nn_std.at[i_time].set(
-                    0.0
-                )
+                # No successes: use NaN to indicate "not applicable"
+                calls_to_success_list.append((float("nan"), float("nan")))
+            
+            # Time per call (in milliseconds)
+            time_per_call_ms = time_per_call * 1000
+            time_per_call_list.append((time_per_call_ms, 0.0))
+            
+            # AUC top 1 (best run by min loss)
+            best_run_idx = run_min_losses.index(min(run_min_losses))
+            auc_top_1_list.append(run_aucs[best_run_idx])
+            
+            # AUC top 10%
+            auc_top_10_list.append(_multi_auc_top_k(run_min_losses, run_aucs, k_fraction=0.1))
+            
+            # === Diversity (needs successful params) ===
+            successful_params = jnp.array([
+                all_best_params_history[i][idx - 1]
+                for i, (idx, success) in enumerate(zip(indices, run_has_success))
+                if success and idx > 0
+            ])
+            
+            if successful_params.shape[0] >= 2:
+                diversity_overall_list.append(_multi_solution_diversity_overall(successful_params))
+                diversity_nn_list.append(_multi_solution_diversity_nn(successful_params))
+            else:
+                diversity_overall_list.append((0.0, 0.0))
+                diversity_nn_list.append((0.0, 0.0))
 
+        # Convert lists to arrays for BenchmarkResult
         return BenchmarkResult(
             algorithm_name=config.name,
-            fraction_of_success=SingleMetric(value=fraction_of_success_arr),
-            min_loss=SingleMetric(value=min_loss_arr),
-            avg_loss=AggregateMetric(mean=avg_loss_mean, std=avg_loss_std),
+            fraction_of_success=SingleMetric(value=jnp.array(fraction_of_success_list)),
+            min_loss=SingleMetric(value=jnp.array(min_loss_list)),
+            avg_loss=AggregateMetric(
+                mean=jnp.array([m for m, _ in avg_loss_list]),
+                std=jnp.array([s for _, s in avg_loss_list]),
+            ),
             time_to_success=AggregateMetric(
-                mean=time_to_success_mean, std=time_to_success_std
+                mean=jnp.array([m for m, _ in time_to_success_list]),
+                std=jnp.array([s for _, s in time_to_success_list]),
             ),
             calls_to_success=AggregateMetric(
-                mean=calls_to_success_mean, std=calls_to_success_std
+                mean=jnp.array([m for m, _ in calls_to_success_list]),
+                std=jnp.array([s for _, s in calls_to_success_list]),
             ),
             solution_diversity_overall=AggregateMetric(
-                mean=solution_diversity_overall_mean, std=solution_diversity_overall_std
+                mean=jnp.array([m for m, _ in diversity_overall_list]),
+                std=jnp.array([s for _, s in diversity_overall_list]),
             ),
             solution_diversity_nn=AggregateMetric(
-                mean=solution_diversity_nn_mean, std=solution_diversity_nn_std
+                mean=jnp.array([m for m, _ in diversity_nn_list]),
+                std=jnp.array([s for _, s in diversity_nn_list]),
             ),
             time_per_call=AggregateMetric(
-                mean=time_per_call_mean, std=time_per_call_std
+                mean=jnp.array([m for m, _ in time_per_call_list]),
+                std=jnp.array([s for _, s in time_per_call_list]),
             ),
-            auc_top_1=SingleMetric(value=auc_top_1_arr),
-            auc_top_10=AggregateMetric(mean=auc_top_10_mean, std=auc_top_10_std),
-        )
-
-    def _calculate_diversity_with_std(
-        self, successful_params: Float[Array, "n_successful n_params"], n_successes: int
-    ) -> tuple[tuple[float, float], tuple[float, float]]:
-        """Calculate solution diversity metrics with standard deviations.
-
-        Args:
-            successful_params: Parameters of successful solutions
-            n_successes: Number of successful solutions
-
-        Returns:
-            Tuple of ((overall_diversity_mean, overall_diversity_std),
-                     (nearest_neighbor_diversity_mean, nearest_neighbor_diversity_std))
-        """
-        # Calculate pairwise distances between all successful solutions
-        diff = successful_params[:, None, :] - successful_params[None, :, :]
-        distances = jnp.linalg.norm(diff, axis=2)  # Shape: (n_succ, n_succ)
-
-        # OVERALL DIVERSITY: Mean and std of pairwise distances (excluding diagonal)
-        mask = ~jnp.eye(n_successes, dtype=bool)
-        pairwise_distances = distances[mask]
-        diversity_overall_mean = jnp.mean(pairwise_distances)
-        diversity_overall_std = jnp.std(pairwise_distances)
-
-        # NEAREST NEIGHBOR DIVERSITY: Mean and std of distances to nearest neighbors
-        distances_no_diag = jnp.where(
-            jnp.eye(n_successes, dtype=bool), jnp.inf, distances
-        )
-        nearest_neighbor_distances = jnp.min(distances_no_diag, axis=1)
-        diversity_nn_mean = jnp.mean(nearest_neighbor_distances)
-        diversity_nn_std = jnp.std(nearest_neighbor_distances)
-
-        return (diversity_overall_mean, diversity_overall_std), (
-            diversity_nn_mean,
-            diversity_nn_std,
+            auc_top_1=SingleMetric(value=jnp.array(auc_top_1_list)),
+            auc_top_10=AggregateMetric(
+                mean=jnp.array([m for m, _ in auc_top_10_list]),
+                std=jnp.array([s for _, s in auc_top_10_list]),
+            ),
         )
 
     def run_benchmark(self, save_to_file: bool = True) -> list[BenchmarkResult]:

@@ -1,22 +1,32 @@
-# Short-Term TODO
-- Add outputs at the end of an algorithm to continue later on
+## Short-Term TODO
+- ~~Add outputs at the end of an algorithm to continue later on~~
+  > Added the option to input starting parameters
 - ~~Fix adam to start over for the next optimize() call~~
   > Implemented a way of initializing its parameters
 - ~~Find out how to initialize PSO population~~
+- ~~Add mean/std to benchmarking (and to typst table)~~
+- ~~Implement more precise time tracking~~
+  > Implemented `wall_time_indices`
+- ~~Implement the precise time tracking in `benchmark.py`~~
 - Implement a class that handles all evox algorithms
   - Derive many different optimizers from this one
 
-# Notes
+## Notes
 - Eine gute Initialisierung immer als richtlinie währed optimierung
 - Stabilität bei Initialisierung charakterisieren
 - Man kann noch eininges viel modularer machen! Aber erstmal verschiedene Algos ausprobieren von EvoX
+- UMAP um setups mit EIgenschaften zu Lösungen
+- Speichern von Lösungen!
 
-# Metric notes
+## Metric notes
 
-## PMO Benchmark
+### Sören
+- Siehe Notes
+
+### PMO Benchmark
 - AUC of top-K average property value vs. calls (min-max scaled to [0,1])
 
-## Tartarus
+### Tartarus
 - Average of best fitness (+std)
 - Initialization time
 - Time per call
@@ -24,18 +34,18 @@
 - Solution Diversity (Euclid distance)
 - (Rate of success, Time to success)
 
-## GuacaMol / Moses
+### GuacaMol / Moses
 - Solution Diversity
 - (Validity: Rate of success)
 - Rest not applicable (has to do with input data)
 - Maybe for Voyager: Similarity to voyager parameters
 - MOSES: Similarity to Nearest Neighbor
 
-## Dockstring
+### Dockstring
 - (Calls to sucess, loss as a fx of call)
 - (other irrelevant metrics for our case)
 
-# Benchmark notes
+## Benchmark notes
 
 - Random Seed TODO
   - Need to adapt algorithm implementations
@@ -46,7 +56,7 @@
 - Cool plots could be a good idea for Benchmark results.
 - Why was AUC sinking in the first runs?
 
-# Modularization changelog
+## Modularization changelog
 I am modularizing voyager_optimization to prepare for other algorithms and hyperparameter optimization. This should later be a subclass of a uifo optmization class which modularizes the more general optimization of a uifo setup. I think that starting with modularizing this more simple optimization is better.
 ### HOW TO USE
 Here's an example of how to run the new modulraized code with fixed hyper parameters:
@@ -124,32 +134,32 @@ As there will be many optimization algorithms, this was necessary. Created subfo
 ### Added `jaxtyping`
 - Using type annotation like `Float[Array, "iterations pop"]
 
-# Candidate Libraries
-## PyGAD
+## Candidate Libraries
+### PyGAD
 - not that great
 - Slow because of CPU
-## EvoX (maybe also EvoGP, EvoRL)
+### EvoX (maybe also EvoGP, EvoRL)
 - Seem great but are torch based
 - Older jax-based EvalX version (0.9.0) exists
 
-## evosax
+### evosax
 - Seems good
 - jax-based
 - many algorithms (no PSO seemingly)
 
-## numpyro
+### numpyro
 - jax-based, relies on jax' autodiff
 - For bayesian regression
 
-# Algos to try
+## Algos to try
 
-## Gradient stuff
+### Gradient stuff
 
-## Particle Swarm Optimization (PSO)
+### Particle Swarm Optimization (PSO)
 ### Ressources
 - [Getting started with PSO (EvoX)](https://evox.readthedocs.io/en/latest/examples/so-algorithm.html)
 - [Custom Problems in EvoX](https://evox.readthedocs.io/en/stable/tutorial/tutorial_part5.html)
 
-## Differential Evolution (DE)
+### Differential Evolution (DE)
 
-## Bayesian Regression
+### Bayesian Regression

@@ -3,17 +3,17 @@ from optimization import EvoxPSO, AdamGD, VoyagerProblem, Benchmark, AlgorithmCo
 # Setup
 problem = VoyagerProblem()
 configs = [
-    AlgorithmConfig(EvoxPSO(problem, batch_size=40), {"pop_size": 80}, "PSO-80"),
+    AlgorithmConfig(EvoxPSO(problem, batch_size=125), {"pop_size": 500}, "PSO-500"),
     AlgorithmConfig(AdamGD(problem), {"learning_rate": 0.1}, "Adam-0.1"),
 ]
 
 # Run benchmark
 benchmark = Benchmark(
     problem=problem,
-    success_loss=100,
+    success_loss=0,
     configs=configs,
-    n_runs=2,
-    wall_time_steps=[10, 30, 60],
+    n_runs=5,
+    wall_time_steps=[30, 60, 120, 210, 360],
 )
 
 results = benchmark.run_benchmark(save_to_file=True)
