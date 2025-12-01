@@ -17,10 +17,11 @@ Compatibility:
 import numpy as np
 import jax.numpy as jnp
 import csv
+import json
 from pathlib import Path
 from datetime import datetime
 from jaxtyping import Array, Float
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from dataclasses import dataclass, fields
 
 from optimization import OptimizationAlgorithm, ContinuousProblem, AlgorithmType
@@ -105,8 +106,22 @@ def _run_first_success_iter(
     return None
 
 
-def _run_auc(losses: Float[Array, "iterations"], dx: float) -> float:
-    """Area under the loss curve for a single run."""
+def _run_auc(
+    losses: Float[Array, "iterations"], dx: float, floor: float | None = None
+) -> float:
+    """Area under the loss curve for a single run.
+
+    Args:
+        losses: Loss values per iteration
+        dx: Time step between iterations
+        floor: Optional floor value (e.g., success_loss). Losses below this
+            are clamped to prevent negative AUC from "over-success".
+
+    Returns:
+        Area under the (possibly clamped) loss curve
+    """
+    if floor is not None:
+        losses = jnp.maximum(losses, floor)
     return float(jnp.trapezoid(losses, dx=dx))
 
 
@@ -252,6 +267,31 @@ class BenchmarkResult:
     auc_top_10: AggregateMetric
 
 
+@dataclass
+class AlgorithmRunData:
+    """Raw run data for a single algorithm configuration.
+
+    This dataclass stores all the raw data from running an algorithm multiple times,
+    allowing results to be saved and re-evaluated later with different parameters
+    (e.g., different success_loss thresholds).
+
+    Attributes:
+        algorithm_name: Name of the algorithm configuration
+        calls_per_iteration: Number of objective function calls per iteration
+        all_best_params: Best parameters found by each run, shape (n_runs, n_params)
+        all_best_params_history: List of arrays, each (n_iterations, n_params)
+        all_losses: List of arrays, each (n_iterations,)
+        all_wall_time_indices: List of lists, each containing indices for wall_time checkpoints
+    """
+
+    algorithm_name: str
+    calls_per_iteration: int
+    all_best_params: Float[Array, "runs params"]
+    all_best_params_history: List[Float[Array, "iterations params"]]
+    all_losses: List[Float[Array, "iterations"]]
+    all_wall_time_indices: List[List[int]]
+
+
 class AlgorithmConfig:
     """Configuration for an algorithm to benchmark."""
 
@@ -345,14 +385,14 @@ class Benchmark:
         # Warmup jit compilation
         _ = problem.objective_function(jnp.zeros(problem.n_params))
 
-    def _run_algorithm(self, config: AlgorithmConfig) -> BenchmarkResult:
-        """Run a single algorithm configuration multiple times and evaluate results.
+    def _collect_run_data(self, config: AlgorithmConfig) -> AlgorithmRunData:
+        """Run algorithm multiple times and collect raw data.
 
         Args:
             config: Algorithm configuration
 
         Returns:
-            BenchmarkResult containing all metrics for this configuration
+            AlgorithmRunData containing all raw run results
         """
         print(f"\n{'=' * 70}")
         print(f"Running: {config.name}")
@@ -363,14 +403,14 @@ class Benchmark:
         print(f"{'=' * 70}\n")
 
         all_best_params = []
-        all_best_params_history = []  # list of arrays (variable length)
-        all_losses = []  # list of arrays (variable length)
-        all_wall_time_indices = []  # list of lists (indices per timestep)
+        all_best_params_history = []
+        all_losses = []
+        all_wall_time_indices = []
 
         for i_run in range(self._n_runs):
             print(f"Run {i_run + 1}/{self._n_runs}...", end=" ", flush=True)
 
-            # Run optimization with wall_times to get exact indices
+            # Run algorithm with wall_times
             best_params, best_params_history, losses, wall_time_indices, *_ = config.algorithm.optimize(
                 save_to_file=False,
                 return_best_params_history=True,
@@ -390,21 +430,37 @@ class Benchmark:
 
         print(f"\nCompleted {self._n_runs} runs for {config.name}")
 
-        # Convert best_params to array (these should all be same shape)
-        all_best_params = jnp.array(all_best_params)
+        return AlgorithmRunData(
+            algorithm_name=config.name,
+            calls_per_iteration=config.calls_per_iteration,
+            all_best_params=jnp.array(all_best_params),
+            all_best_params_history=all_best_params_history,
+            all_losses=all_losses,
+            all_wall_time_indices=all_wall_time_indices,
+        )
 
-        # Evaluate results using list-based approach
+    def _evaluate_run_data(self, run_data: AlgorithmRunData) -> BenchmarkResult:
+        """Evaluate an AlgorithmRunData and return BenchmarkResult.
+
+        Args:
+            run_data: Raw run data for one algorithm
+
+        Returns:
+            BenchmarkResult with computed metrics
+        """
         return self._evaluate_runs(
-            config,
-            all_best_params,
-            all_best_params_history,
-            all_losses,
-            all_wall_time_indices,
+            run_data.algorithm_name,
+            run_data.calls_per_iteration,
+            run_data.all_best_params,
+            run_data.all_best_params_history,
+            run_data.all_losses,
+            run_data.all_wall_time_indices,
         )
 
     def _evaluate_runs(
         self,
-        config: AlgorithmConfig,
+        algorithm_name: str,
+        calls_per_iteration: int,
         all_best_params: Float[Array, "runs params"],
         all_best_params_history: list[Float[Array, "iterations params"]],
         all_losses: list[Float[Array, "iterations"]],
@@ -413,7 +469,8 @@ class Benchmark:
         """Evaluate an algorithm's runs using per-run functions and aggregation.
 
         Args:
-            config: Algorithm configuration
+            algorithm_name: Name of the algorithm
+            calls_per_iteration: Number of objective function calls per iteration
             all_best_params: Best parameters found during each run
             all_best_params_history: History of best params per iteration (list of arrays)
             all_losses: Losses per iteration for each run (list of arrays)
@@ -423,8 +480,6 @@ class Benchmark:
             BenchmarkResult containing all metrics as arrays
         """
         print("Evaluating runs...")
-        n_runs = len(all_losses)
-        n_time_steps = len(self._wall_time_steps)
 
         # Result containers (lists, converted to arrays at the end)
         fraction_of_success_list = []
@@ -438,20 +493,25 @@ class Benchmark:
         diversity_overall_list = []
         diversity_nn_list = []
 
-        # Get calls_per_iteration from config
-        calls_per_iter = config.calls_per_iteration
+        # Get calls_per_iteration
+        calls_per_iter = calls_per_iteration
 
         for i_time, wall_time in enumerate(self._wall_time_steps):
             # Get per-run iteration indices for this time step
             indices = [wti[i_time] for wti in all_wall_time_indices]
             
-            # Compute time_per_iteration based on this timestep
-            # Use average iterations across runs for this time step
+            # Per-run time_per_iter (each run may have different iteration counts)
+            run_time_per_iter = [
+                wall_time / idx if idx > 0 else 0.0
+                for idx in indices
+            ]
+            
+            # Average time_per_iter for metrics that need a single value (e.g., time_per_call)
             avg_iters = sum(indices) / len(indices) if indices else 1
-            time_per_iter = wall_time / avg_iters if avg_iters > 0 else 0.0
+            avg_time_per_iter = wall_time / avg_iters if avg_iters > 0 else 0.0
             
             # Time per objective function call (accounting for population/batch size)
-            time_per_call = time_per_iter / calls_per_iter if calls_per_iter > 0 else 0.0
+            time_per_call = avg_time_per_iter / calls_per_iter if calls_per_iter > 0 else 0.0
 
             # === Per-run computations via list comprehensions ===
             run_min_losses = [
@@ -466,9 +526,10 @@ class Benchmark:
                 _run_first_success_iter(losses[:idx], self._success_loss)
                 for losses, idx in zip(all_losses, indices)
             ]
+            # AUC with floor at success_loss to prevent negative values from "over-success"
             run_aucs = [
-                _run_auc(losses[:idx], dx=time_per_iter)
-                for losses, idx in zip(all_losses, indices)
+                _run_auc(losses[:idx], dx=tpi, floor=self._success_loss)
+                for losses, idx, tpi in zip(all_losses, indices, run_time_per_iter)
             ]
 
             # === Aggregate into benchmark metrics ===
@@ -482,10 +543,10 @@ class Benchmark:
             # Average loss (mean ± std of per-run minimums)
             avg_loss_list.append(_agg_mean_std(run_min_losses))
             
-            # Time to success (only successful runs)
+            # Time to success using per-run time scale (fixes drift issue)
             success_times = [
-                iter_idx * time_per_iter
-                for iter_idx in run_first_success_iters
+                iter_idx * run_time_per_iter[i]
+                for i, iter_idx in enumerate(run_first_success_iters)
                 if iter_idx is not None
             ]
             if success_times:
@@ -531,7 +592,7 @@ class Benchmark:
 
         # Convert lists to arrays for BenchmarkResult
         return BenchmarkResult(
-            algorithm_name=config.name,
+            algorithm_name=algorithm_name,
             fraction_of_success=SingleMetric(value=jnp.array(fraction_of_success_list)),
             min_loss=SingleMetric(value=jnp.array(min_loss_list)),
             avg_loss=AggregateMetric(
@@ -565,63 +626,223 @@ class Benchmark:
             ),
         )
 
-    def run_benchmark(self, save_to_file: bool = True) -> list[BenchmarkResult]:
+    def run_benchmark(
+        self,
+        save_csv: bool = True,
+        save_run_data: bool = False,
+        load_from: Optional[str | Path] = None,
+        run_data_dir: str | Path = "./run_data",
+    ) -> List[BenchmarkResult]:
         """Run benchmark for all algorithm configurations and return results.
 
-        Executes each algorithm configuration for the specified number of runs,
-        evaluates performance metrics at each time checkpoint, and optionally
-        saves results to a timestamped CSV file.
+        This is the single entry point for benchmarking. It can either:
+        - Run algorithms and collect fresh data (default)
+        - Load previously saved run data and re-evaluate
 
         Args:
-            save_to_file: Whether to save results to CSV file (default: True)
+            save_csv: Whether to save metrics to CSV file (default: True)
+            save_run_data: Whether to save raw run data for later re-evaluation (default: False)
+            load_from: Path to directory with saved run data. If provided, skips running
+                algorithms and loads data instead. Supports re-evaluation with different
+                success_loss (set via __init__ or by modifying self._success_loss before call).
+            run_data_dir: Directory for saving run data when save_run_data=True (default: ./run_data)
 
         Returns:
             List of BenchmarkResult, one for each algorithm configuration
         """
+        # Determine data source
+        if load_from is not None:
+            run_data_list = self._load_run_data(Path(load_from))
+            mode_str = f"LOADING from {load_from}"
+        else:
+            mode_str = "RUNNING algorithms"
+
+        # Print header
         print("\n" + "=" * 70)
-        print("BENCHMARK SUITE")
+        print(f"BENCHMARK SUITE ({mode_str})")
         print("=" * 70)
         print(
             f"Problem: {self._problem._name if hasattr(self._problem, '_name') else 'Unknown'}"
         )
         print(f"Success threshold: {self._success_loss}")
-        print(f"Number of algorithms: {len(self._configs)}")
-        print(f"Runs per algorithm: {self._n_runs}")
+        if load_from is None:
+            print(f"Number of algorithms: {len(self._configs)}")
+            print(f"Runs per algorithm: {self._n_runs}")
         print(f"Wall time checkpoints: {self._wall_time_steps}")
         print("=" * 70)
 
+        # Collect or load data, then evaluate
         results = []
+        run_data_list_for_saving = []
 
-        for i, config in enumerate(self._configs, 1):
-            print(f"\n[{i}/{len(self._configs)}] Benchmarking: {config.name}")
-            result = self._run_algorithm(config)
-            results.append(result)
+        if load_from is not None:
+            # Data already loaded above
+            for i, run_data in enumerate(run_data_list, 1):
+                print(f"\n[{i}/{len(run_data_list)}] Evaluating: {run_data.algorithm_name}")
+                result = self._evaluate_run_data(run_data)
+                results.append(result)
+                self._print_result_summary(result)
+        else:
+            # Run algorithms and collect data
+            for i, config in enumerate(self._configs, 1):
+                print(f"\n[{i}/{len(self._configs)}] Benchmarking: {config.name}")
+                
+                # Collect raw data
+                run_data = self._collect_run_data(config)
+                run_data_list_for_saving.append(run_data)
+                
+                # Evaluate
+                result = self._evaluate_run_data(run_data)
+                results.append(result)
+                self._print_result_summary(result)
 
-            # Print summary for this algorithm
-            print(f"\n--- Summary for {config.name} ---")
-            print(
-                f"  Success rate (final): {float(result.fraction_of_success.value[-1]):.1%}"
-            )
-            print(f"  Min loss (final): {float(result.min_loss.value[-1]):.6f}")
-            print(
-                f"  Avg loss (final): {float(result.avg_loss.mean[-1]):.6f} ± {float(result.avg_loss.std[-1]):.6f}"
-            )
-            print(
-                f"  Time to success: {float(result.time_to_success.mean[-1]):.2f} ± {float(result.time_to_success.std[-1]):.2f}s"
-            )
-            print(
-                f"  Diversity (overall): {float(result.solution_diversity_overall.mean[-1]):.4f} ± {float(result.solution_diversity_overall.std[-1]):.4f}"
-            )
-
+        # Print footer
         print("\n" + "=" * 70)
         print("BENCHMARK COMPLETE")
         print("=" * 70)
 
-        # Save results to file if requested
-        if save_to_file:
+        # Save outputs
+        if save_run_data and load_from is None:
+            self._save_run_data(run_data_list_for_saving, run_data_dir)
+        
+        if save_csv:
             self._save_results_to_csv(results)
 
         return results
+
+    def _print_result_summary(self, result: BenchmarkResult) -> None:
+        """Print summary for a single algorithm result."""
+        print(f"\n--- Summary for {result.algorithm_name} ---")
+        print(
+            f"  Success rate (final): {float(result.fraction_of_success.value[-1]):.1%}"
+        )
+        print(f"  Min loss (final): {float(result.min_loss.value[-1]):.6f}")
+        print(
+            f"  Avg loss (final): {float(result.avg_loss.mean[-1]):.6f} ± {float(result.avg_loss.std[-1]):.6f}"
+        )
+        print(
+            f"  Time to success: {float(result.time_to_success.mean[-1]):.2f} ± {float(result.time_to_success.std[-1]):.2f}s"
+        )
+        print(
+            f"  Diversity (overall): {float(result.solution_diversity_overall.mean[-1]):.4f} ± {float(result.solution_diversity_overall.std[-1]):.4f}"
+        )
+
+    def _load_run_data(self, data_dir: Path) -> List[AlgorithmRunData]:
+        """Load saved run data from disk.
+
+        Args:
+            data_dir: Directory containing metadata.json and NPZ files
+
+        Returns:
+            List of AlgorithmRunData, one per algorithm
+        """
+        # Load metadata
+        with open(data_dir / "metadata.json", "r") as f:
+            metadata = json.load(f)
+
+        saved_wall_time_steps = metadata["wall_time_steps"]
+        
+        # Validate wall_time_steps compatibility
+        for wt in self._wall_time_steps:
+            if wt not in saved_wall_time_steps:
+                raise ValueError(
+                    f"Requested wall_time {wt} not in saved wall_time_steps: {saved_wall_time_steps}. "
+                    f"Current wall_time_steps: {self._wall_time_steps}"
+                )
+
+        print(f"\nLoading run data from: {data_dir}")
+        print(f"  Saved wall_time_steps: {saved_wall_time_steps}")
+        print(f"  Using wall_time_steps: {self._wall_time_steps}")
+
+        run_data_list = []
+
+        for algo_info in metadata["algorithms"]:
+            npz_path = data_dir / algo_info["file"]
+            print(f"  Loading {algo_info['name']}...")
+
+            with np.load(npz_path, allow_pickle=True) as data:
+                # Load raw arrays
+                all_wall_time_indices_raw = [list(arr) for arr in data["all_wall_time_indices"]]
+                
+                # Filter wall_time_indices to match current wall_time_steps
+                if self._wall_time_steps != saved_wall_time_steps:
+                    idx_map = [saved_wall_time_steps.index(wt) for wt in self._wall_time_steps]
+                    all_wall_time_indices = [
+                        [wti[i] for i in idx_map]
+                        for wti in all_wall_time_indices_raw
+                    ]
+                else:
+                    all_wall_time_indices = all_wall_time_indices_raw
+
+                run_data = AlgorithmRunData(
+                    algorithm_name=str(data["algorithm_name"]),
+                    calls_per_iteration=int(data["calls_per_iteration"]),
+                    all_best_params=jnp.array(data["all_best_params"]),
+                    all_best_params_history=[jnp.array(arr) for arr in data["all_best_params_history"]],
+                    all_losses=[jnp.array(arr) for arr in data["all_losses"]],
+                    all_wall_time_indices=all_wall_time_indices,
+                )
+                run_data_list.append(run_data)
+
+        return run_data_list
+
+    def _save_run_data(
+        self,
+        run_data_list: List[AlgorithmRunData],
+        output_dir: str | Path,
+    ) -> Path:
+        """Save raw run data to NPZ files for later re-evaluation.
+
+        Args:
+            run_data_list: List of AlgorithmRunData to save
+            output_dir: Base directory for saving (will create timestamped subdirectory)
+
+        Returns:
+            Path to the created directory
+        """
+        output_dir = Path(output_dir)
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        problem_name = (
+            self._problem._name if hasattr(self._problem, "_name") else "problem"
+        )
+        save_dir = output_dir / f"{problem_name}_{timestamp}"
+        save_dir.mkdir(parents=True, exist_ok=True)
+
+        # Save metadata
+        metadata = {
+            "problem_name": problem_name,
+            "success_loss": self._success_loss,
+            "n_runs": self._n_runs,
+            "wall_time_steps": self._wall_time_steps,
+            "timestamp": timestamp,
+            "algorithms": [],
+        }
+
+        for run_data in run_data_list:
+            safe_name = run_data.algorithm_name.replace("/", "_").replace(" ", "_")
+            npz_path = save_dir / f"{safe_name}.npz"
+
+            np.savez(
+                npz_path,
+                algorithm_name=run_data.algorithm_name,
+                calls_per_iteration=run_data.calls_per_iteration,
+                all_best_params=np.array(run_data.all_best_params),
+                all_best_params_history=np.array(run_data.all_best_params_history, dtype=object),
+                all_losses=np.array(run_data.all_losses, dtype=object),
+                all_wall_time_indices=np.array(run_data.all_wall_time_indices, dtype=object),
+            )
+
+            metadata["algorithms"].append({
+                "name": run_data.algorithm_name,
+                "calls_per_iteration": run_data.calls_per_iteration,
+                "file": f"{safe_name}.npz",
+            })
+
+        with open(save_dir / "metadata.json", "w") as f:
+            json.dump(metadata, f, indent=2)
+
+        print(f"\nRun data saved to: {save_dir}")
+        return save_dir
 
     def print_summary(self, results: list[BenchmarkResult]):
         """Print a summary comparison of all algorithm results.

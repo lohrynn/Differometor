@@ -1,0 +1,24 @@
+{
+  "problem_name": "voyager",
+  "success_loss": 0,
+  "n_runs": 5,
+  "wall_time_steps": [
+    30,
+    60,
+    120,
+    180
+  ],
+  "timestamp": "2025-11-30_23-49-57",
+  "algorithms": [
+    {
+      "name": "PSO-500",
+      "calls_per_iteration": 500,
+      "file": "PSO-500.npz"
+    },
+    {
+      "name": "Adam-0.1",
+      "calls_per_iteration": 1,
+      "file": "Adam-0.1.npz"
+    }
+  ]
+}
