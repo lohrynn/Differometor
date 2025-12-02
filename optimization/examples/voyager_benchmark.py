@@ -12,9 +12,9 @@ benchmark = Benchmark(
     problem=problem,
     success_loss=0,
     configs=configs,
-    n_runs=2,
-    wall_time_steps=[1,2,5],
+    n_runs=15,
+    wall_time_steps=[120, 300, 600, 1200],
 )
 
-results = benchmark.run_benchmark(save_to_file=False)
+results = benchmark.run_benchmark(save_csv=True, save_run_data=True)
 benchmark.print_summary(results)

@@ -207,15 +207,15 @@ class EvoxPSO(OptimizationAlgorithm):
             if n_generations is not None:
                 for _ in range(n_generations):
                     elapsed = time.time() - start_time
-                    
+
                     # Record generation index at wall_times checkpoints
                     while wall_times_remaining and elapsed >= wall_times_remaining[0]:
                         wall_time_indices.append(gen)
                         wall_times_remaining.popleft()
-                    
+
                     if elapsed >= max_wall_time:
                         break
-                    
+
                     workflow.step()
                     gen += 1
                     if return_best_params_history:
@@ -225,21 +225,21 @@ class EvoxPSO(OptimizationAlgorithm):
             else:
                 while True:
                     elapsed = time.time() - start_time
-                    
+
                     # Record generation index at wall_times checkpoints
                     while wall_times_remaining and elapsed >= wall_times_remaining[0]:
                         wall_time_indices.append(gen)
                         wall_times_remaining.popleft()
-                    
+
                     if elapsed >= max_wall_time:
                         break
-                    
+
                     workflow.step()
                     gen += 1
                     if return_best_params_history:
                         best_params = t2j(monitor.topk_solutions)[0]
                         best_params_history.append(best_params)
-            
+
             # Fill remaining wall_times that weren't reached with final generation
             while wall_times_remaining:
                 wall_time_indices.append(gen)
@@ -266,4 +266,10 @@ class EvoxPSO(OptimizationAlgorithm):
                 hyper_param_str=hyper_param_str,
             )
 
-        return best_params, best_params_history, losses, wall_time_indices, population_losses
+        return (
+            best_params,
+            best_params_history,
+            losses,
+            wall_time_indices,
+            population_losses,
+        )

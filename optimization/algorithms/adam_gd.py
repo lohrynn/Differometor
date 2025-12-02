@@ -72,7 +72,7 @@ class AdamGD(OptimizationAlgorithm):
                 parameter generation when init_params is None. Defaults to None.
             wall_times (list[int | float] | None): List of wall-time checkpoints (in seconds).
                 The algorithm runs until the maximum checkpoint. At each checkpoint,
-                the current iteration index is recorded. If None, runs for max_iterations or 
+                the current iteration index is recorded. If None, runs for max_iterations or
                 until patience is exceeded. Defaults to None.
             learning_rate (float): Learning rate for Adam optimizer. Defaults to 0.1.
             **adam_kwargs: Additional keyword arguments passed to optax.adam().
@@ -111,7 +111,7 @@ class AdamGD(OptimizationAlgorithm):
         params, losses = best_params, []
         best_params_history = []  # later shape: (n_iterations, n_params)
         best_loss = 1e10
-        
+
         # Initialize wall_time_indices tracking
         wall_time_indices: list[int] | None = None
         wall_times_remaining: deque[int | float] | None = None
@@ -127,12 +127,12 @@ class AdamGD(OptimizationAlgorithm):
             i = 0
             while (time.time() - start_time) < max_wall_time:
                 elapsed = time.time() - start_time
-                
+
                 # Record iteration index at wall_times checkpoints
                 while wall_times_remaining and elapsed >= wall_times_remaining[0]:
                     wall_time_indices.append(i)
                     wall_times_remaining.popleft()
-                
+
                 loss, grads = self._grad_fn(params)
 
                 if i % 100 == 0:
@@ -151,7 +151,7 @@ class AdamGD(OptimizationAlgorithm):
                 params = optax.apply_updates(params, updates)
                 losses.append(float(loss))
                 i += 1
-            
+
             # Fill remaining wall_times that weren't reached with final iteration
             while wall_times_remaining:
                 wall_time_indices.append(i - 1 if i > 0 else 0)

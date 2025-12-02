@@ -10,6 +10,7 @@
 - ~~Implement the precise time tracking in `benchmark.py`~~
 - Implement a class that handles all evox algorithms
   - Derive many different optimizers from this one
+- (?) Remove the behaviour of PSO when `n_generations` and `wall_times` is set
 
 ## Notes
 - Eine gute Initialisierung immer als richtlinie währed optimierung
