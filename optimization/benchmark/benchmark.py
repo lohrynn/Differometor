@@ -134,9 +134,12 @@ def _run_auc(
 
 
 def _agg_mean_std(values: list[float]) -> tuple[float, float]:
-    """Compute mean and std from a list of per-run values."""
+    """Compute mean and std from a list of per-run values.
+    
+    Uses nanmean/nanstd to handle NaN values gracefully.
+    """
     arr = jnp.array(values)
-    return float(jnp.mean(arr)), float(jnp.std(arr))
+    return float(jnp.nanmean(arr)), float(jnp.nanstd(arr))
 
 
 def _agg_min(values: list[float]) -> float:
