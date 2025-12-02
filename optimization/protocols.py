@@ -12,7 +12,7 @@ from enum import Enum
 class AlgorithmType(Enum):
     GRADIENT_BASED = "gradient_based"
     EVOLUTIONARY = "evolutionary"
-    BAYESIAN = "bayesian"
+    SURROGATE_BASED = "surrogate_based"
     DIFFUSION_BASED = "diffusion_based"
 
 
