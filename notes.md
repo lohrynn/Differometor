@@ -1,3 +1,4 @@
+# Notes
 ## Short-Term TODO
 - ~~Add outputs at the end of an algorithm to continue later on~~
   > Added the option to input starting parameters
@@ -11,6 +12,22 @@
 - Implement a class that handles all evox algorithms
   - Derive many different optimizers from this one
 - (?) Remove the behaviour of PSO when `n_generations` and `wall_times` is set
+
+## Tmp notes
+- Standard Deviations werden gebenchmarked
+- Kein Padding von losses unterschiedlicher runs mehr
+- Runs können insgesamt gesaved und geladen werden
+  - `best_params_history` speichern?
+- Für alle Algorithmen
+  - Akzeptieren `random_seed` für Sachen wie `torch.seed`
+  - Akzeptieren `init_params`
+  - Akzeptieren `wall_times`
+  - Geben `wall_time_indices` zurück
+- Adam fixes
+- Runtime type checking
+- Added bayesian optimization
+  - Zu langsam?
+- Brauchen wir das feature für `max_iterations` + `wall_times`?
 
 ## Notes
 - Eine gute Initialisierung immer als richtlinie währed optimierung
