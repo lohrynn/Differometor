@@ -18,6 +18,7 @@ from optimization.utils import t2j, j2t, t2j_numpy, j2t_numpy
 from optimization.algorithms.evox_pso import EvoxPSO
 from optimization.algorithms.adam_gd import AdamGD
 from optimization.algorithms.bayesian_optimization import BayesianOptimization
+from optimization.algorithms.botorch_bo import BotorchBO
 
 # Import problems
 from optimization.problems.voyager_problem import VoyagerProblem
@@ -35,6 +36,7 @@ __all__ = [
     "EvoxPSO",
     "AdamGD",
     "BayesianOptimization",
+    "BotorchBO",
     # Problems
     "VoyagerProblem",
     # Utilities

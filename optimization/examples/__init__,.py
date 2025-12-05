@@ -4,4 +4,6 @@ __all__ = [
     "voyager_adam",
     "voyager_evox_pso",
     "voyager_benchmark",
+    "voyager_bo",
+    "voyager_botorch_bo",
 ]

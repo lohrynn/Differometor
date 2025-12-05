@@ -12,6 +12,7 @@
 - Implement a class that handles all evox algorithms
   - Derive many different optimizers from this one
 - (?) Remove the behaviour of PSO when `n_generations` and `wall_times` is set
+- Fix AUC drift
 
 ## Tmp notes
 - Standard Deviations werden gebenchmarked
@@ -167,17 +168,29 @@ As there will be many optimization algorithms, this was necessary. Created subfo
 
 ### numpyro
 - jax-based, relies on jax' autodiff
-- For bayesian regression
+- For bayesian optimization
 
 ## Algos to try
 
 ### Gradient stuff
 
 ### Particle Swarm Optimization (PSO)
-### Ressources
+### Resources
 - [Getting started with PSO (EvoX)](https://evox.readthedocs.io/en/latest/examples/so-algorithm.html)
 - [Custom Problems in EvoX](https://evox.readthedocs.io/en/stable/tutorial/tutorial_part5.html)
 
 ### Differential Evolution (DE)
 
-### Bayesian Regression
+### Bayesian Optimization
+- Optimization is performing poorly in the beginning
+  - Maybe this will not be the case later on
+- 
+
+
+-  `bayesian-optimization` package is way too slow. Need another one
+- Candidates are:
+  - BoTorch
+  - GPJax (with Optax)
+    - Probably better if objective fun were less complex
+  - Boax
+    - Jax-based contender to BoTorch?
