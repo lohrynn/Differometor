@@ -10,6 +10,7 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+from jax import random
 from jaxtyping import Array, Float
 
 import differometor as df
@@ -19,8 +20,23 @@ from differometor.utils import sigmoid_bounding, update_setup
 
 
 class VoyagerProblem:
-    def __init__(self, name: str = "voyager", n_frequencies: int = 100):
+    def __init__(
+        self, name: str = "voyager", n_frequencies: int = 100, use_sigmoid_bounding: bool = True
+    ):
+        """Initialize the Voyager optimization problem.
+
+        Args:
+            name (str): Name of the problem, used for output file naming. Defaults to "voyager".
+            n_frequencies (int): Number of frequency points for sensitivity calculation.
+                Defaults to 100.
+            use_sigmoid_bounding (bool): Whether to apply sigmoid bounding inside the
+                objective function. When True (default), parameters are mapped from
+                (-inf, inf) to their respective bounds using a sigmoid function.
+                Set to False when using bounded optimizers (like PSO) that directly
+                search within the parameter bounds. Defaults to True.
+        """
         self._name = name.lstrip("_")
+        self._use_sigmoid_bounding = use_sigmoid_bounding
         ### Calculate the target sensitivity ###
         # --------------------------------------#
         # use a predefined Voyager setup with one noise detector and two signal detectors
@@ -85,7 +101,7 @@ class VoyagerProblem:
         )
 
         # calculate the bounds for the properties to be optimized
-        self._bounds = np.array(
+        self.bounds = np.array(
             [
                 [property_bounds[pair[1]][0], property_bounds[pair[1]][1]]
                 for pair in self._optimization_pairs
@@ -93,14 +109,18 @@ class VoyagerProblem:
         ).T
 
         # abstract for pure objective_function
-        bounds = self._bounds
+        bounds = self.bounds
+        apply_sigmoid = use_sigmoid_bounding  # Capture in closure
 
         @jax.jit
         def objective_function(
             optimized_parameters: Float[Array, "{self.n_params}"],
         ) -> Float:
-            # map the parameters to between 0 and 1 and then to their respective bounds
-            optimized_parameters = sigmoid_bounding(optimized_parameters, bounds)
+            # Optionally map parameters using sigmoid bounding
+            # When use_sigmoid_bounding=True: maps (-inf, inf) -> bounds
+            # When use_sigmoid_bounding=False: assumes parameters are already within bounds
+            if apply_sigmoid:
+                optimized_parameters = sigmoid_bounding(optimized_parameters, bounds)
             carrier, signal, noise = df.simulate_in_parallel(
                 optimized_parameters, *simulation_arrays[1:]
             )
@@ -130,12 +150,87 @@ class VoyagerProblem:
         """Frequencies at which the sensitivity is calculated."""
         return self._frequencies
 
+    def estimate_random_baseline(
+        self,
+        n_samples: int = 1000,
+        seed: int = 0,
+        batch_size: int = 100,
+    ) -> dict:
+        """Estimate mean objective function value for random parameters within bounds.
+
+        This establishes a baseline for random search performance. Parameters are
+        sampled uniformly within the problem's bounds (no sigmoid bounding).
+
+        Args:
+            n_samples: Total number of random samples to evaluate
+            seed: Random seed for reproducibility
+            batch_size: Number of samples to evaluate in parallel per batch
+
+        Returns:
+            Dictionary with statistics:
+                - mean: Mean loss across all samples
+                - std: Standard deviation
+                - min: Best (minimum) loss found
+                - max: Worst (maximum) loss found
+                - median: Median loss
+        """
+        print(f"Estimating random baseline with {n_samples} samples...")
+        
+        key = random.PRNGKey(seed)
+        lower, upper = self.bounds[0], self.bounds[1]
+        
+        # Create objective without sigmoid bounding for fair sampling
+        @jax.jit
+        def eval_batch(params_batch):
+            return jax.vmap(self.objective_function)(params_batch)
+        
+        all_losses = []
+        n_batches = (n_samples + batch_size - 1) // batch_size
+        
+        for i in range(n_batches):
+            current_batch_size = min(batch_size, n_samples - i * batch_size)
+            key, subkey = random.split(key)
+            
+            # Sample uniformly within bounds
+            random_params = random.uniform(
+                subkey,
+                shape=(current_batch_size, self.n_params),
+                minval=lower,
+                maxval=upper
+            )
+            
+            # Evaluate batch
+            losses = eval_batch(random_params)
+            all_losses.append(losses)
+            
+            if (i + 1) % 10 == 0 or i == n_batches - 1:
+                print(f"  Processed {min((i + 1) * batch_size, n_samples)}/{n_samples} samples")
+        
+        # Combine all batches
+        all_losses = jnp.concatenate(all_losses)
+        
+        stats = {
+            "mean": float(jnp.mean(all_losses)),
+            "std": float(jnp.std(all_losses)),
+            "min": float(jnp.min(all_losses)),
+            "max": float(jnp.max(all_losses)),
+            "median": float(jnp.median(all_losses)),
+        }
+        
+        print(f"\nRandom baseline statistics:")
+        print(f"  Mean: {stats['mean']:.6f} ± {stats['std']:.6f}")
+        print(f"  Min:  {stats['min']:.6f}")
+        print(f"  Max:  {stats['max']:.6f}")
+        print(f"  Median: {stats['median']:.6f}")
+        
+        return stats
+
     def calculate_sensitivity(
         self,
         optimized_parameters: Float[Array, "{self.n_params}"],
     ) -> Float[Array, "n_frequencies"]:
         update_setup(
-            optimized_parameters, self._optimization_pairs, self._bounds, self._setup
+            optimized_parameters, self._optimization_pairs, self.bounds, self._setup
         )
 
         carrier, signal, noise, detector_ports, *_ = df.run(
