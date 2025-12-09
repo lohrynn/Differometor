@@ -16,5 +16,5 @@ benchmark = Benchmark(
     wall_time_steps=[120, 300, 600, 1200],
 )
 
-results = benchmark.run_benchmark(save_csv=True, save_run_data=True)
+results = benchmark.run_benchmark(save_csv=True, load_from="./run_data/voyager_2025-12-04_00-04-13")
 benchmark.print_summary(results)

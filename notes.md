@@ -173,6 +173,8 @@ As there will be many optimization algorithms, this was necessary. Created subfo
 ## Algos to try
 
 ### Gradient stuff
+- Annealing!
+- PSO gradient based?
 
 ### Particle Swarm Optimization (PSO)
 ### Resources

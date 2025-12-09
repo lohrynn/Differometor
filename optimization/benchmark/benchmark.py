@@ -107,22 +107,44 @@ def _run_first_success_iter(
 
 
 def _run_auc(
-    losses: Float[Array, "iterations"], dx: float, floor: float | None = None
+    losses: Float[Array, "iterations"],
+    dx: float,
+    floor: float | None = None,
+    baseline_loss: float | None = None,
+    wall_time: float | None = None,
 ) -> float:
-    """Area under the loss curve for a single run.
+    """Area under the loss curve for a single run, normalized by the random-search baseline.
 
     Args:
         losses: Loss values per iteration
         dx: Time step between iterations
-        floor: Optional floor value (e.g., success_loss). Losses below this
-            are clamped to prevent negative AUC from "over-success".
+        floor: Optional floor value (e.g., success_loss). Losses are calculated as max(0, loss - floor)
+        baseline_loss: Expected loss of random guess. If provided with wall_time,
+            returns normalized AUC: -log(algorithm_auc / baseline_auc)
+        wall_time: Total wall time budget. Required if baseline_loss is provided.
 
     Returns:
-        Area under the (possibly clamped) loss curve
+        Area under the (possibly clamped) loss curve, optionally normalized by baseline.
+        If normalized: positive values mean better than random (lower AUC ratio),
+        negative means worse (higher AUC ratio). Zero means equal to random.
+        Formula: -log(algorithm_auc / baseline_auc) = log(baseline_auc / algorithm_auc)
     """
     if floor is not None:
-        losses = jnp.maximum(losses, floor)
-    return float(jnp.trapezoid(losses, dx=dx))
+        losses = jnp.maximum(0, losses - floor)
+    
+    algorithm_auc = float(jnp.trapezoid(losses, dx=dx))
+    
+    # Normalize by baseline if provided
+    if baseline_loss is not None and wall_time is not None:
+        baseline_auc = baseline_loss * wall_time
+        # -log(ratio): positive when algorithm_auc < baseline_auc (better than random)
+        # Avoid division by zero or log of zero
+        if algorithm_auc <= 0:
+            return float('inf')  # Perfect performance
+        ratio = algorithm_auc / baseline_auc
+        return -float(jnp.log2(ratio))
+    
+    return algorithm_auc
 
 
 # =============================================================================
@@ -265,7 +287,9 @@ class BenchmarkResult:
 
     time_per_call: AggregateMetric
 
-    # Top-k metrics
+    # Top-k metrics (normalized AUC using -log ratio)
+    # Formula: -log(algorithm_auc / baseline_auc)
+    # Positive = better than random, Negative = worse, Zero = equal
     auc_top_1: SingleMetric
     auc_top_10: AggregateMetric
 
@@ -372,6 +396,7 @@ class Benchmark:
         configs: list[AlgorithmConfig],
         n_runs: int = 100,
         wall_time_steps: list[float] = [300],  # 5 minutes in seconds
+        random_baseline_loss: float = 463.5,
     ):
         """Initialize the benchmark suite.
 
@@ -381,12 +406,14 @@ class Benchmark:
             configs: List of algorithm configurations to benchmark
             n_runs: Number of independent runs per algorithm configuration
             wall_time_steps: Time checkpoints (in seconds) at which to evaluate metrics
+            random_baseline_loss: Expected loss of a random guess (default: 463.7 for Voyager).
         """
         self._problem = problem
         self._success_loss = success_loss
         self._configs = configs
         self._n_runs = n_runs
         self._wall_time_steps = sorted(wall_time_steps)
+        self._random_baseline_loss = random_baseline_loss
         # Warmup jit compilation
         _ = problem.objective_function(jnp.zeros(problem.n_params))
 
@@ -531,9 +558,16 @@ class Benchmark:
                 _run_first_success_iter(losses[:idx], self._success_loss)
                 for losses, idx in zip(all_losses, indices)
             ]
-            # AUC with floor at success_loss to prevent negative values from "over-success"
+            # AUC normalized by random baseline (positive = better than random)
+            # Floor at success_loss prevents negative contribution from "over-success"
             run_aucs = [
-                _run_auc(losses[:idx], dx=tpi, floor=self._success_loss)
+                _run_auc(
+                    losses[:idx],
+                    dx=tpi,
+                    floor=self._success_loss,
+                    baseline_loss=self._random_baseline_loss,
+                    wall_time=wall_time,
+                )
                 for losses, idx, tpi in zip(all_losses, indices, run_time_per_iter)
             ]
 
