@@ -15,8 +15,8 @@ from optimization.config import create_parser
 from optimization.utils import t2j, j2t, t2j_numpy, j2t_numpy
 
 # Import algorithms
-from optimization.algorithms.evox_pso import EvoxPSO
-from optimization.algorithms.adam_gd import AdamGD
+from optimization.algorithms.evolutionary.evox_pso import EvoxPSO
+from optimization.algorithms.gradient_based.adam_gd import AdamGD
 from optimization.algorithms.bayesian_optimization import BayesianOptimization
 from optimization.algorithms.botorch_bo import BotorchBO
 

@@ -4,10 +4,11 @@ os.environ["MPLCONFIGDIR"] = "/mnt/lustre/work/krenn/klz895/Differometor/tmp"
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import torch
 import time
 from collections import deque
-from evox.algorithms import PSO
+from evox.algorithms import PSO, CLPSO, CSO, DMSPSOEL, FSPSO, SLPSOGS, SLPSOUS
 from evox.core import Problem as EvoxProblem
 from evox.workflows import EvalMonitor, StdWorkflow
 from jaxtyping import Array, Float, jaxtyped
@@ -26,22 +27,43 @@ class EvoxPSO(OptimizationAlgorithm):
     """EvoX-based Particle Swarm Optimization algorithm.
 
     Implements PSO using the EvoX library with JAX backend. Handles batched
-    evaluation of particles to manage memory efficiently.
+    evaluation of particles to manage memory efficiently. Supports multiple PSO
+    variants through the variant parameter.
     """
 
-    algorithm_str: str = "evox_pso"
     algorithm_type: AlgorithmType = AlgorithmType.EVOLUTIONARY
 
-    def __init__(self, problem: ContinuousProblem, batch_size: int = 5) -> None:
+    def __init__(self, problem: ContinuousProblem, batch_size: int = 5, variant: str = "PSO") -> None:
         """Initialize EvoX Particle Swarm Optimization.
 
         Args:
             problem (ContinuousProblem): The continuous optimization problem to solve.
             batch_size (int): Number of particles to evaluate simultaneously in each batch.
                 Reduce this value if encountering out-of-memory errors. Defaults to 5.
+            variant (str): PSO variant to use. Options:
+                - 'PSO': Standard Particle Swarm Optimization (default)
+                - 'CLPSO': Comprehensive Learning PSO
+                - 'CSO': Competitive Swarm Optimizer
+                - 'DMSPSOEL': Dynamic Multi-Swarm PSO with Elite Learning
+                - 'FSPSO': Fitness-Sharing PSO
+                - 'SLPSOGS': Social Learning PSO with Gaussian Sampling
+                - 'SLPSOUS': Social Learning PSO with Uniform Sampling
+                Defaults to 'PSO'.
         """
         self._problem = problem
         self._batch_size = batch_size
+        self._variant = variant.upper()  # Normalize to uppercase
+        
+        # Validate variant
+        valid_variants = ["PSO", "CLPSO", "CSO", "DMSPSOEL", "FSPSO", "SLPSOGS", "SLPSOUS"]
+        if self._variant not in valid_variants:
+            raise ValueError(
+                f"Unknown PSO variant: '{variant}'. "
+                f"Valid options are: {', '.join(valid_variants)}"
+            )
+        
+        # Set algorithm_str based on variant
+        self.algorithm_str = f"evox_{self._variant.lower()}"
 
         # Define the problem in EvoX so it can be optimized
         class PSOProblem(EvoxProblem):
@@ -90,6 +112,7 @@ class EvoxPSO(OptimizationAlgorithm):
         n_generations: int | None = None,
         lb: Float[Array, "{self._problem.n_params}"] | None = None,
         ub: Float[Array, "{self._problem.n_params}"] | None = None,
+        use_problem_bounds: bool = False,
         **pso_kwargs,
     ) -> tuple[
         Float[Array, "{self._problem.n_params}"],
@@ -118,13 +141,38 @@ class EvoxPSO(OptimizationAlgorithm):
                 is None. Can be combined with wall_times as an additional stopping criterion.
                 Defaults to None.
             lb (Float[Array, "n_params"] | None): Lower bounds for each parameter. If None,
-                uses -10 for all parameters. Defaults to None.
+                uses -10 for all parameters. Ignored if use_problem_bounds=True. Defaults to None.
             ub (Float[Array, "n_params"] | None): Upper bounds for each parameter. If None,
-                uses 10 for all parameters. Defaults to None.
-            **pso_kwargs: Additional keyword arguments passed to EvoX PSO constructor.
-                Common options: w (float, inertia weight, default 0.6), phi_p (float,
-                cognitive coefficient, default 2.5), phi_g (float, social coefficient,
-                default 0.8).
+                uses 10 for all parameters. Ignored if use_problem_bounds=True. Defaults to None.
+            use_problem_bounds (bool): If True, use bounds from `problem.bounds` instead of
+                lb/ub parameters. This allows PSO to search directly in the parameter space
+                without sigmoid bounding. Requires the problem to have a `bounds` attribute
+                (shape [2, n_params] with [lower_bounds, upper_bounds]) and ideally
+                `use_sigmoid_bounding=False` in the problem. Defaults to False.
+            **pso_kwargs: Variant-specific keyword arguments passed to the EvoX algorithm constructor.
+                Parameter options by variant:
+                - PSO: w (float, inertia weight, default 0.6), phi_p (float,
+                  cognitive coefficient, default 2.5), phi_g (float, social coefficient,
+                  default 0.8)
+                - CLPSO: inertia_weight (float, default 0.5), const_coefficient (float,
+                  default 1.5), learning_probability (float, default 0.05)
+                - CSO: phi (float, inertia weight, default 0.0), mean (torch.Tensor | None),
+                  stdev (torch.Tensor | None)
+                - DMSPSOEL: dynamic_sub_swarm_size (int, default 10), dynamic_sub_swarms_num
+                  (int, default 5), following_sub_swarm_size (int, default 10),
+                  regrouped_iteration_num (int, default 50), max_iteration (int, default 100),
+                  inertia_weight (float, default 0.7), pbest_coefficient (float, default 1.5),
+                  lbest_coefficient (float, default 1.5), rbest_coefficient (float, default 1.0),
+                  gbest_coefficient (float, default 1.0). Note: pop_size is ignored for DMSPSOEL;
+                  it's calculated as dynamic_sub_swarm_size * dynamic_sub_swarms_num + following_sub_swarm_size.
+                - FSPSO: inertia_weight (float, default 0.6), cognitive_coefficient (float,
+                  default 2.5), social_coefficient (float, default 0.8), mean (torch.Tensor | None),
+                  stdev (torch.Tensor | None), mutate_rate (float, default 0.01)
+                - SLPSOGS: social_influence_factor (float, default 0.2),
+                  demonstrator_choice_factor (float, default 0.7)
+                - SLPSOUS: social_influence_factor (float, default 0.2),
+                  demonstrator_choice_factor (float, default 0.7)
+                Refer to EvoX documentation for complete parameter details.
 
         Returns:
             tuple: A 5-tuple containing:
@@ -144,18 +192,50 @@ class EvoxPSO(OptimizationAlgorithm):
         # Initiate monitor for loss tracking etc.
         monitor = EvalMonitor()
 
-        # Convert bounds to torch tensors if needed
-        if lb is None:
-            lb = -10 * torch.ones(self._problem.n_params)
-        elif isinstance(lb, jax.Array):
-            lb = j2t(lb)
-        if ub is None:
-            ub = 10 * torch.ones(self._problem.n_params)
-        elif isinstance(ub, jax.Array):
-            ub = j2t(ub)
+        # Determine bounds: use problem bounds if requested, otherwise use lb/ub parameters
+        if use_problem_bounds:
+            if not hasattr(self._problem, 'bounds'):
+                raise ValueError(
+                    "use_problem_bounds=True requires the problem to have a 'bounds' attribute. "
+                    f"Problem {type(self._problem).__name__} does not have this attribute."
+                )
+            problem_bounds = self._problem.bounds
+            # problem.bounds is expected to be shape [2, n_params] with [lower, upper]
+            if isinstance(problem_bounds, np.ndarray):
+                lb = torch.from_numpy(problem_bounds[0]).float()
+                ub = torch.from_numpy(problem_bounds[1]).float()
+            elif isinstance(problem_bounds, jax.Array):
+                lb = j2t(problem_bounds[0])
+                ub = j2t(problem_bounds[1])
+            else:
+                lb = torch.tensor(problem_bounds[0], dtype=torch.float32)
+                ub = torch.tensor(problem_bounds[1], dtype=torch.float32)
+            print(f"Using problem bounds: lb shape={lb.shape}, ub shape={ub.shape}")
+        else:
+            # Convert bounds to torch tensors if needed
+            if lb is None:
+                lb = -10 * torch.ones(self._problem.n_params)
+            elif isinstance(lb, jax.Array):
+                lb = j2t(lb)
+            if ub is None:
+                ub = 10 * torch.ones(self._problem.n_params)
+            elif isinstance(ub, jax.Array):
+                ub = j2t(ub)
 
-        # Initiate algorithm with hyper params
-        algorithm = PSO(pop_size=pop_size, lb=lb, ub=ub, **pso_kwargs)
+        # Map variant names to algorithm classes
+        variant_map = {
+            "PSO": PSO,
+            "CLPSO": CLPSO,
+            "CSO": CSO,
+            "DMSPSOEL": DMSPSOEL,
+            "FSPSO": FSPSO,
+            "SLPSOGS": SLPSOGS,
+            "SLPSOUS": SLPSOUS,
+        }
+        
+        # Initiate algorithm with hyper params using the selected variant
+        AlgorithmClass = variant_map[self._variant]
+        algorithm = AlgorithmClass(pop_size=pop_size, lb=lb, ub=ub, **pso_kwargs)
 
         # If initial population is provided, set it before init_step
         if init_params_pop is not None:
