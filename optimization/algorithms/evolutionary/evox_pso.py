@@ -183,7 +183,7 @@ class EvoxPSO(OptimizationAlgorithm):
                 - wall_time_indices (list[int] | None): Generation indices corresponding to
                   each wall_times checkpoint (in sorted ascending order). None if wall_times is None.
                 - population_losses (Float[Array, "n_gens pop_size"]): Loss for each particle
-                  at each generation (PSO-specific).
+                  at each generation (PSO-specific). Could contain NaN if population sizes vary (CSO).
         """
         # Set random seed if provided (affects both initialization and step randomness)
         if random_seed is not None:
@@ -328,9 +328,31 @@ class EvoxPSO(OptimizationAlgorithm):
         # Extract results from monitor
         best_params = t2j(monitor.topk_solutions)[0]
         best_params_history = jnp.array(best_params_history)
-        # jnp.array is used because fit_history is a list of tensors (doesnt have dlpack for t2j)
-        population_losses = jnp.array(monitor.fit_history)
-        losses = jnp.min(population_losses, axis=1)
+        
+        # Handle fit_history: it's a list of fitness values per generation
+        # Each generation may have different number of particles, so we need to pad to uniform shape
+        if len(monitor.fit_history) > 0:
+            # Convert to numpy first, then find max length
+            fit_history_np = [np.asarray(f) for f in monitor.fit_history]
+            max_len = max(len(f) for f in fit_history_np)
+            
+            # Pad each generation's fitness array to max_len with NaN
+            padded_history = []
+            for f in fit_history_np:
+                if len(f) < max_len:
+                    padded = np.full(max_len, np.nan)
+                    padded[:len(f)] = f
+                    padded_history.append(padded)
+                else:
+                    padded_history.append(f)
+            
+            population_losses = jnp.array(padded_history)
+            # Compute losses as min (ignoring NaN values if present)
+            losses = jnp.nanmin(population_losses, axis=1)
+        else:
+            # Edge case: empty history
+            population_losses = jnp.array([])
+            losses = jnp.array([])
 
         print("Best params history shape:")
         print(best_params_history.shape)
