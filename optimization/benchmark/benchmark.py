@@ -131,19 +131,19 @@ def _run_auc(
     """
     if floor is not None:
         losses = jnp.maximum(0, losses - floor)
-    
+
     algorithm_auc = float(jnp.trapezoid(losses, dx=dx))
-    
+
     # Normalize by baseline if provided
     if baseline_loss is not None and wall_time is not None:
         baseline_auc = baseline_loss * wall_time
         # -log(ratio): positive when algorithm_auc < baseline_auc (better than random)
         # Avoid division by zero or log of zero
         if algorithm_auc <= 0:
-            return float('inf')  # Perfect performance
+            return float("inf")  # Perfect performance
         ratio = algorithm_auc / baseline_auc
         return -float(jnp.log2(ratio))
-    
+
     return algorithm_auc
 
 
@@ -680,7 +680,7 @@ class Benchmark:
         save_csv: bool = True,
         save_run_data: bool = False,
         load_from: Optional[str | Path] = None,
-        run_data_dir: str | Path = "./run_data",
+        run_data_dir: str | Path = "./benchmark_run_data",
     ) -> List[BenchmarkResult]:
         """Run benchmark for all algorithm configurations and return results.
 
@@ -694,7 +694,7 @@ class Benchmark:
             load_from: Path to directory with saved run data. If provided, skips running
                 algorithms and loads data instead. Supports re-evaluation with different
                 success_loss (set via __init__ or by modifying self._success_loss before call).
-            run_data_dir: Directory for saving run data when save_run_data=True (default: ./run_data)
+            run_data_dir: Directory for saving run data when save_run_data=True (default: ./benchmark_run_data)
 
         Returns:
             List of BenchmarkResult, one for each algorithm configuration
@@ -943,14 +943,14 @@ class Benchmark:
     def _save_results_to_csv(self, results: list[BenchmarkResult]):
         """Save benchmark results to a CSV file with timestamp.
 
-        Creates a ./benchmarks/ directory and saves results with filename
+        Creates a ./benchmark_results/ directory and saves results with filename
         format: benchmark_{problem_name}_{timestamp}.csv
 
         Args:
             results: List of BenchmarkResult from run_benchmark()
         """
-        # Create benchmarks directory
-        output_dir = Path("./benchmarks")
+        # Create benchmark_results directory
+        output_dir = Path("./benchmark_results")
         output_dir.mkdir(parents=True, exist_ok=True)
 
         # Generate filename with timestamp

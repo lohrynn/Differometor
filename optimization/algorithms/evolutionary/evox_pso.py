@@ -1,7 +1,3 @@
-import os
-
-os.environ["MPLCONFIGDIR"] = "/mnt/lustre/work/krenn/klz895/Differometor/tmp"
-
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -26,14 +22,37 @@ from optimization import (
 class EvoxPSO(OptimizationAlgorithm):
     """EvoX-based Particle Swarm Optimization algorithm.
 
-    Implements PSO using the EvoX library with JAX backend. Handles batched
+    Implements PSO using the EvoX library with PyTorch backend. Handles batched
     evaluation of particles to manage memory efficiently. Supports multiple PSO
     variants through the variant parameter.
+
+    Attributes:
+        algorithm_str (str): Identifier string (e.g., "evox_pso", "evox_clpso").
+        algorithm_type (AlgorithmType): Type classification (EVOLUTIONARY).
+        _problem (ContinuousProblem): The optimization problem instance.
+        _batch_size (int): Number of particles to evaluate per batch.
+        _variant (str): PSO variant name (uppercase, e.g., "PSO", "CLPSO").
+        _pso_problem (EvoxProblem): EvoX problem wrapper for the objective function.
+
+    Note:
+        This algorithm uses `problem.objective_function` with explicit bounds
+        when `use_problem_bounds=True` (default). This allows the swarm to
+        search directly in the bounded parameter space without sigmoid transformation.
+
+    Example:
+        >>> problem = VoyagerProblem()
+        >>> optimizer = EvoxPSO(problem, batch_size=50, variant="CLPSO")
+        >>> best_params, history, losses, wall_indices, pop_losses = optimizer.optimize(
+        ...     pop_size=200,
+        ...     wall_times=[30, 60, 120],
+        ... )
     """
 
     algorithm_type: AlgorithmType = AlgorithmType.EVOLUTIONARY
 
-    def __init__(self, problem: ContinuousProblem, batch_size: int = 5, variant: str = "PSO") -> None:
+    def __init__(
+        self, problem: ContinuousProblem, batch_size: int = 5, variant: str = "PSO"
+    ) -> None:
         """Initialize EvoX Particle Swarm Optimization.
 
         Args:
@@ -53,15 +72,23 @@ class EvoxPSO(OptimizationAlgorithm):
         self._problem = problem
         self._batch_size = batch_size
         self._variant = variant.upper()  # Normalize to uppercase
-        
+
         # Validate variant
-        valid_variants = ["PSO", "CLPSO", "CSO", "DMSPSOEL", "FSPSO", "SLPSOGS", "SLPSOUS"]
+        valid_variants = [
+            "PSO",
+            "CLPSO",
+            "CSO",
+            "DMSPSOEL",
+            "FSPSO",
+            "SLPSOGS",
+            "SLPSOUS",
+        ]
         if self._variant not in valid_variants:
             raise ValueError(
                 f"Unknown PSO variant: '{variant}'. "
                 f"Valid options are: {', '.join(valid_variants)}"
             )
-        
+
         # Set algorithm_str based on variant
         self.algorithm_str = f"evox_{self._variant.lower()}"
 
@@ -103,6 +130,7 @@ class EvoxPSO(OptimizationAlgorithm):
     def optimize(
         self,
         save_to_file: bool = True,
+        use_problem_bounds: bool = True,
         init_params_pop: Float[Array, "{pop_size} {self._problem.n_params}"]
         | None = None,
         return_best_params_history: bool = False,
@@ -112,7 +140,6 @@ class EvoxPSO(OptimizationAlgorithm):
         n_generations: int | None = None,
         lb: Float[Array, "{self._problem.n_params}"] | None = None,
         ub: Float[Array, "{self._problem.n_params}"] | None = None,
-        use_problem_bounds: bool = False,
         **pso_kwargs,
     ) -> tuple[
         Float[Array, "{self._problem.n_params}"],
@@ -125,6 +152,10 @@ class EvoxPSO(OptimizationAlgorithm):
 
         Args:
             save_to_file (bool): Whether to save optimization results to file. Defaults to True.
+            use_problem_bounds (bool): If True, use bounds from `problem.bounds` instead of
+                lb/ub parameters. This allows PSO to search directly in the parameter space
+                without sigmoid bounding. Requires the problem to have a `bounds` attribute
+                (shape [2, n_params] with [lower_bounds, upper_bounds]). Defaults to True.
             init_params_pop (Float[Array, "pop_size n_params"] | None): Initial population of
                 parameters. If None, randomly initialized within bounds. Defaults to None.
             return_best_params_history (bool): Whether to track best parameters at each
@@ -144,11 +175,6 @@ class EvoxPSO(OptimizationAlgorithm):
                 uses -10 for all parameters. Ignored if use_problem_bounds=True. Defaults to None.
             ub (Float[Array, "n_params"] | None): Upper bounds for each parameter. If None,
                 uses 10 for all parameters. Ignored if use_problem_bounds=True. Defaults to None.
-            use_problem_bounds (bool): If True, use bounds from `problem.bounds` instead of
-                lb/ub parameters. This allows PSO to search directly in the parameter space
-                without sigmoid bounding. Requires the problem to have a `bounds` attribute
-                (shape [2, n_params] with [lower_bounds, upper_bounds]) and ideally
-                `use_sigmoid_bounding=False` in the problem. Defaults to False.
             **pso_kwargs: Variant-specific keyword arguments passed to the EvoX algorithm constructor.
                 Parameter options by variant:
                 - PSO: w (float, inertia weight, default 0.6), phi_p (float,
@@ -194,7 +220,7 @@ class EvoxPSO(OptimizationAlgorithm):
 
         # Determine bounds: use problem bounds if requested, otherwise use lb/ub parameters
         if use_problem_bounds:
-            if not hasattr(self._problem, 'bounds'):
+            if not hasattr(self._problem, "bounds"):
                 raise ValueError(
                     "use_problem_bounds=True requires the problem to have a 'bounds' attribute. "
                     f"Problem {type(self._problem).__name__} does not have this attribute."
@@ -232,7 +258,7 @@ class EvoxPSO(OptimizationAlgorithm):
             "SLPSOGS": SLPSOGS,
             "SLPSOUS": SLPSOUS,
         }
-        
+
         # Initiate algorithm with hyper params using the selected variant
         AlgorithmClass = variant_map[self._variant]
         algorithm = AlgorithmClass(pop_size=pop_size, lb=lb, ub=ub, **pso_kwargs)
@@ -328,24 +354,24 @@ class EvoxPSO(OptimizationAlgorithm):
         # Extract results from monitor
         best_params = t2j(monitor.topk_solutions)[0]
         best_params_history = jnp.array(best_params_history)
-        
+
         # Handle fit_history: it's a list of fitness values per generation
         # Each generation may have different number of particles, so we need to pad to uniform shape
         if len(monitor.fit_history) > 0:
             # Convert to numpy first, then find max length
             fit_history_np = [np.asarray(f) for f in monitor.fit_history]
             max_len = max(len(f) for f in fit_history_np)
-            
+
             # Pad each generation's fitness array to max_len with NaN
             padded_history = []
             for f in fit_history_np:
                 if len(f) < max_len:
                     padded = np.full(max_len, np.nan)
-                    padded[:len(f)] = f
+                    padded[: len(f)] = f
                     padded_history.append(padded)
                 else:
                     padded_history.append(f)
-            
+
             population_losses = jnp.array(padded_history)
             # Compute losses as min (ignoring NaN values if present)
             losses = jnp.nanmin(population_losses, axis=1)

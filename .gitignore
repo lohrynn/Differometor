@@ -12,4 +12,7 @@ tmp
 uninstall.txt
 .python-version
 examples/voyager
-benchmarks/benchmark_voyager_2025-11*
+benchmark_run_data/*
+benchmark_results/*
+algorithm_output/*
+run_data

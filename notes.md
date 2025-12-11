@@ -30,11 +30,14 @@
   - Zu langsam?
 - Brauchen wir das feature für `max_iterations` + `wall_times`?
 
+## Refactoring Notes
+- Class docstrings for attributes
+
 ## Notes
 - Eine gute Initialisierung immer als richtlinie währed optimierung
 - Stabilität bei Initialisierung charakterisieren
 - Man kann noch eininges viel modularer machen! Aber erstmal verschiedene Algos ausprobieren von EvoX
-- UMAP um setups mit EIgenschaften zu Lösungen
+- UMAP um setups mit Eigenschaften zu Lösungen
 - Speichern von Lösungen!
 
 ## Metric notes

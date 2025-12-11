@@ -19,6 +19,27 @@ class AdamGD(OptimizationAlgorithm):
 
     Implements gradient-based optimization using the Adam optimizer from Optax.
     Includes gradient clipping and early stopping based on patience.
+
+    Attributes:
+        algorithm_str (str): Identifier string for this algorithm ("adam").
+        algorithm_type (AlgorithmType): Type classification (GRADIENT_BASED).
+        _problem (ContinuousProblem): The optimization problem instance.
+        max_iterations (int): Maximum number of optimization iterations.
+        patience (int): Early stopping patience (iterations without improvement).
+        _grad_fn (Callable): JIT-compiled gradient function for the objective.
+
+    Note:
+        This algorithm uses `problem.sigmoid_objective_function` which expects
+        unbounded parameters. The sigmoid bounding is applied internally by the
+        objective function, allowing the optimizer to search in (-∞, +∞) space.
+
+    Example:
+        >>> problem = VoyagerProblem()
+        >>> optimizer = AdamGD(problem, max_iterations=10000, patience=500)
+        >>> best_params, history, losses, wall_indices = optimizer.optimize(
+        ...     learning_rate=0.1,
+        ...     wall_times=[30, 60, 120],
+        ... )
     """
 
     algorithm_str: str = "adam"
@@ -42,7 +63,7 @@ class AdamGD(OptimizationAlgorithm):
         self.max_iterations = max_iterations
         self.patience = patience
 
-        self._grad_fn = jax.jit(jax.value_and_grad(self._problem.objective_function))
+        self._grad_fn = jax.jit(jax.value_and_grad(self._problem.sigmoid_objective_function))
 
     @jaxtyped(typechecker=typechecker)
     def optimize(
@@ -162,7 +183,7 @@ class AdamGD(OptimizationAlgorithm):
             for i in range(self.max_iterations):
                 loss, grads = self._grad_fn(params)
 
-                if i % 100 == 0:
+                if i % 500 == 0:
                     print(f"Iteration {i}: Loss = {loss}")
 
                 if loss < best_loss - 1e-4:

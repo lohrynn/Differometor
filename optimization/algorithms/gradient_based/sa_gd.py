@@ -34,6 +34,27 @@ class SAGD(OptimizationAlgorithm):
 
     The probability of going uphill starts low and increases over iterations,
     but stays below a ceiling (default 33%) to ensure convergence.
+
+    Attributes:
+        algorithm_str (str): Identifier string for this algorithm ("sagd").
+        algorithm_type (AlgorithmType): Type classification (GRADIENT_BASED).
+        _problem (ContinuousProblem): The optimization problem instance.
+        max_iterations (int): Maximum number of optimization iterations.
+        patience (int): Early stopping patience (iterations without improvement).
+        _grad_fn (Callable): JIT-compiled gradient function for the objective.
+
+    Note:
+        Like AdamGD, this algorithm uses `problem.sigmoid_objective_function`
+        for unbounded optimization with internal sigmoid bounding.
+
+    Example:
+        >>> problem = VoyagerProblem()
+        >>> optimizer = SAGD(problem, max_iterations=10000)
+        >>> best_params, history, losses, wall_indices = optimizer.optimize(
+        ...     learning_rate=0.1,
+        ...     T0=1.0,
+        ...     wall_times=[30, 60, 120],
+        ... )
     """
 
     algorithm_str: str = "sagd"
@@ -57,7 +78,7 @@ class SAGD(OptimizationAlgorithm):
         self.max_iterations = max_iterations
         self.patience = patience
 
-        self._grad_fn = jax.jit(jax.value_and_grad(self._problem.objective_function))
+        self._grad_fn = jax.jit(jax.value_and_grad(self._problem.sigmoid_objective_function))
 
     def _compute_transition_probability(
         self,
@@ -88,49 +109,51 @@ class SAGD(OptimizationAlgorithm):
         """
         # Ensure epoch >= 0 to avoid log(0)
         n = max(epoch, 0)
-        
+
         # Small epsilon to avoid numerical issues
         eps = 1e-10
         delta_e = max(abs(delta_e), eps)
-        
+
         if use_double_annealing:
             # Double simulated annealing formula (Eq. 14 in paper)
             # For decaying learning rate strategies
             # P_i = exp(-( |ΔE|^(ln(n+2)^(-1/α)) / (T_0 * ε_0 * γ^n * ln(n+2)) )^(β * ln(n+2)))
-            
-            alpha = math.e  # Euler's number
+
+            alpha = math.e
             beta = 0.5772  # Euler-Mascheroni constant
-            
+
             # Fractional power exponent: ln(n+2)^(-1/α)
             frac_power = math.log(n + 2) ** (-1.0 / alpha)
-            
+
             # Temperature: T_0 * ε_0 * γ^n * ln(n+2)
-            current_lr = initial_lr * (lr_decay ** n)
+            current_lr = initial_lr * (lr_decay**n)
             temperature = T0 * current_lr * math.log(n + 2)
-            
+
             # Numerator: |ΔE|^(fractional power)
-            numerator = delta_e ** frac_power
-            
+            numerator = delta_e**frac_power
+
             # Inner ratio
             ratio = numerator / max(temperature, eps)
-            
+
             # Outer exponent: β * ln(n+2)
             outer_exp = beta * math.log(n + 2)
-            
+
             # Final probability
-            exponent = -(ratio ** outer_exp)
-            
+            exponent = -(ratio**outer_exp)
+
         else:
             # Simple formula (Eq. 11 in paper)
             # P_i = exp(-|ΔE| / (T_0 * ε * ln(n+1)))
-            temperature = T0 * learning_rate * math.log(n + 2)  # Use n+2 to avoid log(1)=0
+            temperature = (
+                T0 * learning_rate * math.log(n + 2)
+            )  # Use n+2 to avoid log(1)=0
             exponent = -delta_e / max(temperature, eps)
-        
+
         # Clamp exponent to avoid overflow
         exponent = max(exponent, -100)
-        
+
         probability = math.exp(exponent)
-        
+
         # Clamp probability to [0, 1]
         return min(max(probability, 0.0), 1.0)
 
@@ -226,7 +249,7 @@ class SAGD(OptimizationAlgorithm):
 
         params, losses = best_params, []
         best_params_history = []
-        best_loss = float('inf')
+        best_loss = float("inf")
         prev_loss = 0.0  # Initial previous loss (E_0 = 0 as per paper)
 
         # Statistics tracking
@@ -252,13 +275,13 @@ class SAGD(OptimizationAlgorithm):
         ):
             """Single optimization step with SA-GD logic."""
             loss, grads = self._grad_fn(params)
-            
+
             # Compute loss difference (ΔE)
             delta_e = abs(float(loss) - prev_loss)
-            
+
             # Compute current learning rate (with decay if applicable)
-            current_lr = learning_rate * (lr_decay ** iteration)
-            
+            current_lr = learning_rate * (lr_decay**iteration)
+
             # Compute transition probability
             trans_prob = self._compute_transition_probability(
                 delta_e=delta_e,
@@ -269,20 +292,20 @@ class SAGD(OptimizationAlgorithm):
                 lr_decay=lr_decay,
                 initial_lr=learning_rate,
             )
-            
+
             # Probability of gradient ascent = 1 - trans_prob
             # But we cap it at max_ascent_prob
             ascent_prob = min(1.0 - trans_prob, max_ascent_prob)
-            
+
             # Sample random value to decide descent vs ascent
             rng_key, subkey = jax.random.split(rng_key)
             random_val = float(jax.random.uniform(subkey))
-            
+
             # Compute updates from optimizer
             updates, new_optimizer_state = optimizer.update(
                 grads, optimizer_state, params
             )
-            
+
             if random_val < ascent_prob:
                 # Gradient ASCENT: go uphill
                 # Negate the updates and scale by sigma
@@ -291,10 +314,17 @@ class SAGD(OptimizationAlgorithm):
             else:
                 # Normal gradient DESCENT
                 descent_count += 1
-            
+
             new_params = optax.apply_updates(params, updates)
-            
-            return new_params, new_optimizer_state, float(loss), rng_key, ascent_count, descent_count
+
+            return (
+                new_params,
+                new_optimizer_state,
+                float(loss),
+                rng_key,
+                ascent_count,
+                descent_count,
+            )
 
         # Main optimization loop
         if wall_times is not None:
@@ -311,18 +341,27 @@ class SAGD(OptimizationAlgorithm):
 
                 params, optimizer_state, loss, rng_key, ascent_count, descent_count = (
                     do_optimization_step(
-                        params, optimizer_state, prev_loss, i, rng_key,
-                        ascent_count, descent_count
+                        params,
+                        optimizer_state,
+                        prev_loss,
+                        i,
+                        rng_key,
+                        ascent_count,
+                        descent_count,
                     )
                 )
 
-                if i % 100 == 0:
-                    ascent_pct = 100 * ascent_count / max(ascent_count + descent_count, 1)
-                    print(f"Iteration {i}: Loss = {loss:.6f}, Ascent% = {ascent_pct:.1f}%")
+                if i % 500 == 0:
+                    ascent_pct = (
+                        100 * ascent_count / max(ascent_count + descent_count, 1)
+                    )
+                    print(
+                        f"Iteration {i}: Loss = {loss:.6f}, Ascent% = {ascent_pct:.1f}%"
+                    )
 
                 if loss < best_loss - 1e-4:
                     best_loss, best_params = loss, params
-                    print(f"Iteration {i}: New best loss = {loss}")
+                    # print(f"Iteration {i}: New best loss = {loss}")
 
                 if return_best_params_history:
                     best_params_history.append(best_params)
@@ -341,14 +380,23 @@ class SAGD(OptimizationAlgorithm):
             for i in range(self.max_iterations):
                 params, optimizer_state, loss, rng_key, ascent_count, descent_count = (
                     do_optimization_step(
-                        params, optimizer_state, prev_loss, i, rng_key,
-                        ascent_count, descent_count
+                        params,
+                        optimizer_state,
+                        prev_loss,
+                        i,
+                        rng_key,
+                        ascent_count,
+                        descent_count,
                     )
                 )
 
                 if i % 100 == 0:
-                    ascent_pct = 100 * ascent_count / max(ascent_count + descent_count, 1)
-                    print(f"Iteration {i}: Loss = {loss:.6f}, Ascent% = {ascent_pct:.1f}%")
+                    ascent_pct = (
+                        100 * ascent_count / max(ascent_count + descent_count, 1)
+                    )
+                    print(
+                        f"Iteration {i}: Loss = {loss:.6f}, Ascent% = {ascent_pct:.1f}%"
+                    )
 
                 if loss < best_loss - 1e-4:
                     best_loss, best_params, no_improve_count = loss, params, 0
@@ -368,10 +416,14 @@ class SAGD(OptimizationAlgorithm):
         # Final statistics
         total_steps = ascent_count + descent_count
         if total_steps > 0:
-            print(f"\nSA-GD Statistics:")
+            print("\nSA-GD Statistics:")
             print(f"  Total steps: {total_steps}")
-            print(f"  Ascent steps: {ascent_count} ({100*ascent_count/total_steps:.1f}%)")
-            print(f"  Descent steps: {descent_count} ({100*descent_count/total_steps:.1f}%)")
+            print(
+                f"  Ascent steps: {ascent_count} ({100 * ascent_count / total_steps:.1f}%)"
+            )
+            print(
+                f"  Descent steps: {descent_count} ({100 * descent_count / total_steps:.1f}%)"
+            )
 
         losses = jnp.array(losses)
         best_params_history = (
